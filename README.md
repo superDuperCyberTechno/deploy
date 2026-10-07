@@ -20,6 +20,8 @@ The target server does **not** need composer installed:
 - `bash`, `rsync`, `ssh`, `openssh` client
 - `composer` (only needed for the production install / dev restore steps;
   use `--no-composer` to skip)
+- `curl` (only needed for `deploy --init`, to download the boilerplate
+  config from the public GitHub repository)
 - Access to the server's root account via the configured SSH key
 
 The server needs only an SSH server and whatever the deployed app itself
@@ -40,13 +42,16 @@ needs to run.
 ./extras/deploy/deploy -c /etc/deploy.conf   # custom config location
 ```
 
-`deploy --init [name]` does not generate the boilerplate inline: it fetches
-the file `deploy.<name>.conf` shipped next to the deploy script and writes it
-to `./deploy.conf` (overwrite with `--force`). `deploy.laravel.conf` is the
-Laravel boilerplate. Add more boilerplates by dropping a `deploy.<name>.conf`
-file next to the deploy script — `deploy --init <name>` will find it, and the
-help output lists all available names. The config location can also be set
-with the `DEPLOY_CONF` environment variable or `-c PATH`.
+`deploy --init [name]` does not generate the boilerplate inline: it
+downloads `deploy.<name>.conf` from the public GitHub repository
+(`superDuperCyberTechno/deploy`, branch `main`) and writes it to
+`./deploy.conf` (overwrite with `--force`). The available boilerplate names
+are hardcoded in the script (the `BOILERPLATES` array) and listed in the help
+output; the matching `deploy.<name>.conf` files are served from the
+repository. To add a boilerplate, extend that array and commit its
+`deploy.<name>.conf` to the repository. A failed download (e.g. offline)
+aborts with an error. The config location can also be set with the
+`DEPLOY_CONF` environment variable or `-c PATH`.
 
 ## Configuration (`deploy.conf`)
 
