@@ -28,7 +28,9 @@ needs to run.
 ## Usage
 
 ```bash
-./extras/deploy/deploy --init          # generate boilerplate deploy.conf
+./extras/deploy/deploy --init            # fetch laravel boilerplate into ./deploy.conf
+./extras/deploy/deploy --init laravel    # same, explicit boilerplate name
+./extras/deploy/deploy --init -c out.conf  # write boilerplate to out.conf
 # edit deploy.conf, then:
 ./extras/deploy/deploy                 # deploy the current directory
 ./extras/deploy/deploy ../some/path    # deploy another source directory
@@ -38,9 +40,13 @@ needs to run.
 ./extras/deploy/deploy -c /etc/deploy.conf   # custom config location
 ```
 
-`deploy --init` writes `deploy.conf` to the current directory (overwrite
-with `--force`). The config location can also be set with the `DEPLOY_CONF`
-environment variable.
+`deploy --init [name]` does not generate the boilerplate inline: it fetches
+the file `deploy.<name>.conf` shipped next to the deploy script and writes it
+to `./deploy.conf` (overwrite with `--force`). `deploy.laravel.conf` is the
+Laravel boilerplate. Add more boilerplates by dropping a `deploy.<name>.conf`
+file next to the deploy script — `deploy --init <name>` will find it, and the
+help output lists all available names. The config location can also be set
+with the `DEPLOY_CONF` environment variable or `-c PATH`.
 
 ## Configuration (`deploy.conf`)
 
