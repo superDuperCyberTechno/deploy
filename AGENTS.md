@@ -3,3 +3,4 @@ This project contains a bash deployment script for websites, designed to be sour
 When working on this project, follow these rules...
 - Maintain concise and easy to read comments, across the source code
 - Automatically maintain the semantic versioning and notify the user when doing so
+- Follow the Google Shell Style Guide: https://google.github.io/styleguide/shellguide.html
