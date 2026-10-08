@@ -4,7 +4,7 @@
 
 # Domain or IP to connect to over SSH. The script always connects as the
 # server root user.
-deployment_domain="your-domain.example"
+deployment_domain=""
 
 # Path to the SSH private key of the server root user.
 ssh_key="$HOME/.ssh/id_ed25519"

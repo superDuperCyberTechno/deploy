@@ -293,7 +293,7 @@ RESTORED=0
 cleanup() {
   if (( PRODUCTION_VENDOR == 1 )) && (( RESTORED == 0 )); then
     warn "restoring local development environment (composer install)"
-    composer install --no-interaction --no-progress || true
+    composer install --quiet --no-interaction --no-progress || true
   fi
   rm -f "$IGNORE_FILE"
 }
@@ -307,7 +307,7 @@ elif (( NO_COMPOSER == 1 )); then
   log "skipping composer production install (--no-composer)"
 else
   log "installing production dependencies locally (composer install --no-dev)"
-  composer install --no-dev --optimize-autoloader --prefer-dist \
+  composer install --quiet --no-dev --optimize-autoloader --prefer-dist \
     --no-interaction --no-progress
   PRODUCTION_VENDOR=1
 fi
@@ -413,7 +413,7 @@ fi
 
 if (( PRODUCTION_VENDOR == 1 )); then
   log "re-installing local development environment (composer install)"
-  composer install --no-interaction --no-progress
+  composer install --quiet --no-interaction --no-progress
   RESTORED=1
   PRODUCTION_VENDOR=0
 fi
