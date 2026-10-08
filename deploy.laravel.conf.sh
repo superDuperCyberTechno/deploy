@@ -46,8 +46,13 @@ ignored=(
 )
 
 # Bash commands executed on the server after a successful sync, in order.
-# The server has no composer, so vendor/ is already production-ready at this
+# Each entry is arbitrary shell code run under bash on the server after
+# cd-ing into deployment_folder; a failing command aborts the rest. The
+# server has no composer, so vendor/ is already production-ready at this
 # point.
 post_deployment_commands=(
+    # .env is always excluded from the sync, so the server needs its own.
+    # Warn (remotely) when it is missing before running artisan.
+    "if [ ! -f .env ]; then echo '[deploy][warn] no .env found on the server - artisan commands may fail'; fi"
     "php artisan optimize"
 )

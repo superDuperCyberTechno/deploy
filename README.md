@@ -24,8 +24,9 @@ The target server does **not** need composer installed:
   config from the public GitHub repository)
 - Access to the server's root account via the configured SSH key
 
-The server needs only an SSH server and whatever the deployed app itself
-needs to run.
+The server needs only an SSH server, a `bash` shell (the
+`post_deployment_commands` run under it) and whatever the deployed app
+itself needs to run.
 
 ## Installation
 
@@ -77,7 +78,7 @@ aborts with an error. The config location can also be set with the
 | `deployment_user` | no | (empty) | `user:group` assigned to every synced file via rsync `--chown` (e.g. `www-data:www-data`); empty keeps local file ownership |
 | `web_writable` | no | (empty) | Bash array of folders made writable by the web server via rsync `--chmod` (dirs `2775` with setgid, files `664`) |
 | `ignored` | no | (empty) | Bash array of additional rsync exclude patterns |
-| `post_deployment_commands` | no | (empty) | Bash array of commands run on the server after a successful sync |
+| `post_deployment_commands` | no | (empty) | Bash array of arbitrary shell commands run under bash on the server after cd-ing into `deployment_folder`; a failing command aborts the rest and triggers the local dev restore |
 
 Example:
 
@@ -136,8 +137,9 @@ project in the `ignored` entry.
 Notes:
 
 - Because `.env` is always ignored, the server needs its own `.env` inside
-  `deployment_folder`. The script warns when it cannot find one before
-  running the post-deployment commands.
+  `deployment_folder`. The Laravel boilerplate checks for it before running
+  its `post_deployment_commands` and warns when it is missing; non-Laravel
+  projects add their own check to their config.
 - Excluded paths are also protected from `rsync --delete`, so server-side
   data (uploads, sessions, logs, databases) is never wiped by a sync.
 - The first connection may prompt to accept the server's host key.

@@ -386,27 +386,28 @@ if (( ${#web_writable[@]} > 0 )); then
 fi
 
 # --- Step 3: post-deployment commands (remote) -----------------------------
+# Each config entry is arbitrary shell code (conditionals, loops, ...)
+# executed under bash on the server after cd-ing into deployment_folder. A
+# failing command aborts the remaining ones (set -e) and triggers the local
+# dev-environment restore below. Project-specific checks (e.g. the Laravel
+# .env existence check) belong in the boilerplate config, not here.
 
 if (( DRY_RUN == 1 )); then
   log "dry run: skipping post-deployment commands"
 elif (( ${#post_deployment_commands[@]} > 0 )); then
-  log "checking for .env on the server"
-
-  if ! ssh "${SSH_ARGS[@]}" "root@${deployment_domain}" \
-    "test -f '$(shell_quote "$deployment_folder")/.env'"; then
-    warn "no .env found on the server in ${deployment_folder} — artisan" \
-      "commands will likely fail"
-  fi
-
   log "running ${#post_deployment_commands[@]} post-deployment command(s)" \
     "on the server"
 
-  remote="set -e; cd '$(shell_quote "$deployment_folder")'"
+  # Build a remote bash script locally and feed it to the remote bash via
+  # stdin, so entries may contain multi-line compound commands.
+  remote="set -e"
+  remote+=$'\n'"cd '$(shell_quote "$deployment_folder")'"
   for cmd in "${post_deployment_commands[@]}"; do
-    remote+=" && ${cmd}"
+    remote+=$'\n'"${cmd}"
   done
 
-  if ! ssh "${SSH_ARGS[@]}" "root@${deployment_domain}" "$remote"; then
+  if ! ssh "${SSH_ARGS[@]}" "root@${deployment_domain}" "bash -s" \
+    <<< "$remote"; then
     die "post-deployment commands failed; local dev environment is being" \
       "restored"
   fi
