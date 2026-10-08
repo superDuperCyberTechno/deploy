@@ -97,7 +97,7 @@ current version is printed by `deploy.sh --version`.
 | `ssh_key` | yes | — | Path to the SSH private key of the server root user |
 | `deployment_folder` | no | `/srv/<project-name>` | Remote folder the project is synced into |
 | `deployment_user` | no | (empty) | `user:group` assigned to every synced file via rsync `--chown` (e.g. `root:www-data`); empty keeps root ownership — without the web group the web server cannot read the `750` directories |
-| `web_writable` | no | (empty) | Bash array of folders made group-writable via rsync `--chmod` (dirs `2770` with setgid, files `660`, no world access) |
+| `web_writable` | no | (empty) | Bash array of folders made group-writable over SSH (dirs `2770` with setgid, files `660`, no world access, ownership `deployment_user`) |
 | `ignored` | no | (empty) | Bash array of additional rsync exclude patterns |
 | `pre_cmds_client` | no | (empty) | Bash array of shell commands run on the client (working directory: the source project) before the sync |
 | `pre_cmds_server` | no | (empty) | Bash array of shell commands run on the server (over SSH, in `deployment_folder`) before the sync |
@@ -135,7 +135,8 @@ post_cmds_client=(
 
 Deployments follow a least-privilege model: root owns everything, the web
 server reads via its group and writes only inside the `web_writable`
-folders. Ownership and permissions are handled with rsync flags only:
+folders. Ownership and permissions are handled by the sync (rsync flags)
+plus a dedicated remote permission pass that transfers nothing:
 
 - `deployment_user` adds `--chown=user:group` to the main sync. Use
   `<owner>:<web-server-group>` (the boilerplate ships `root:www-data`): the
@@ -146,15 +147,17 @@ folders. Ownership and permissions are handled with rsync flags only:
   (owner read/write/execute, group read/execute, no world access). File
   permission bits are preserved from the source, so executables (e.g.
   `artisan`) keep their `+x`.
-- `web_writable` triggers a second, filter-restricted rsync pass with
-  `--chmod` — necessary because a single rsync `--chmod` is global and
-  cannot target specific paths. The listed folders (e.g. Laravel's
-  `storage` and `bootstrap/cache`) become group-writable with setgid:
-  directories `2770`, files `660`, group being `deployment_user`'s group.
-  The web server writes via the group while root keeps ownership; files
-  and directories the web server creates inside inherit the group via
-  setgid. This pass runs before `post_cmds_server`, so `php artisan
-  optimize` can write `bootstrap/cache` right away.
+- `web_writable` triggers a remote permission pass over SSH (`chown -R`
+  when `deployment_user` is set, then `find ... chmod` per folder) — no
+  file transfer happens, so ignored files can never leave the client, and
+  permissions are applied unconditionally instead of depending on rsync's
+  transfer decisions. The listed folders (e.g. Laravel's `storage` and
+  `bootstrap/cache`) become group-writable with setgid: directories
+  `2770`, files `660`, ownership `deployment_user`. The web server writes
+  via the group while root keeps ownership; files and directories the web
+  server creates inside inherit the group via setgid. It runs before
+  `post_cmds_server`, so `php artisan optimize` can write `bootstrap/cache`
+  right away.
 
 ## Ignore handling
 

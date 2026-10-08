@@ -64,12 +64,9 @@ readonly BASE_IGNORES=(
 # Least-privilege permission defaults (rsync --chmod syntax). The main
 # sync confines directories to owner rwx / group rx / no world access;
 # file permission bits are preserved from the source, so executables keep
-# their +x. The web_writable pass then makes the listed folders
-# group-writable with setgid (files created by the web server inherit the
-# group), still without world access, while ownership stays with
-# deployment_user (root).
+# their +x. The web_writable folders get their group-writable permissions
+# via a remote chown/chmod command, not via the sync (see below).
 readonly MAIN_DIR_CHMOD="Du=rwx,Dg=rx,Do="
-readonly WEB_WRITABLE_CHMOD="Du=rwx,Dg=rwxs,Do=,Fu=rw,Fg=rw,Fo="
 
 # Print the usage/help text.
 usage() {
@@ -102,8 +99,8 @@ Config keys (deploy.conf.sh):
                             /srv/<project-name>)
     deployment_user         user:group rsync --chown of the synced files,
                             e.g. root:www-data
-    web_writable            Bash array of folders made web-server writable
-                            via rsync --chmod
+    web_writable            Bash array of folders made group-writable via a
+                            remote chown/chmod pass (no file transfer)
     ignored                 Bash array of rsync exclude patterns (Laravel
                             defaults in boilerplate)
     pre_cmds_client         Bash array of commands run on the client before
@@ -435,34 +432,40 @@ if ! rsync "${RSYNC_ARGS[@]}" "${SRC}/" \
 fi
 
 # --- Web-server writable folders -------------------------------------------
-# rsync --chmod is global, so the folders listed in web_writable get their
-# permissions via a dedicated, filter-restricted second pass (dirs and files
-# only under the listed paths). Run before the post-sync server commands,
-# so e.g. php artisan optimize can write bootstrap/cache immediately.
+# A remote permission pass, not a sync: the listed folders become
+# group-writable with setgid — directories 2770, files 660, ownership from
+# deployment_user — so the web server can write there while root keeps
+# ownership. Nothing is transferred here, so ignored files can never leave
+# the client. Runs before the post-sync server commands, so e.g. php
+# artisan optimize can write bootstrap/cache immediately.
 
 if (( ${#web_writable[@]} > 0 )); then
-  CHMOD_ARGS=(-a --chmod="$WEB_WRITABLE_CHMOD")
-  if [[ -n "$deployment_user" ]]; then
-    CHMOD_ARGS+=(--chown="$deployment_user")
-  fi
-  for w in "${web_writable[@]}"; do
-    w="${w%/}" # drop a trailing slash
-    CHMOD_ARGS+=(--filter="+ ${w}/***")
-  done
-  CHMOD_ARGS+=(--filter="- *")
-  CHMOD_ARGS+=(-e "$SSH_CMD")
-  if (( VERBOSE == 1 )); then
-    CHMOD_ARGS+=(-v)
-  fi
   if (( DRY_RUN == 1 )); then
-    CHMOD_ARGS+=(-n)
-  fi
+    log "dry run: skipping web-writable permission pass"
+  else
+    # Build the remote command list; paths are shell-quoted for the remote
+    # bash session. chown only runs when deployment_user is set.
+    perm_cmds=()
+    quoted_paths=''
+    for w in "${web_writable[@]}"; do
+      w="${w%/}" # drop a trailing slash
+      quoted_paths+=" '$(shell_quote "$w")'"
+    done
+    if [[ -n "$deployment_user" ]]; then
+      perm_cmds+=("chown -R '$(shell_quote "$deployment_user")'${quoted_paths}")
+    fi
+    for w in "${web_writable[@]}"; do
+      w="${w%/}" # drop a trailing slash
+      perm_cmds+=(
+        "find '$(shell_quote "$w")' -type d -exec chmod 2770 {} +"
+        "find '$(shell_quote "$w")' -type f -exec chmod 660 {} +"
+      )
+    done
 
-  log "applying web-server writable permissions to: ${web_writable[*]}"
-
-  if ! rsync "${CHMOD_ARGS[@]}" "${SRC}/" \
-    "root@${deployment_domain}:${deployment_folder}/"; then
-    die "permission pass failed"
+    log "applying web-server writable permissions to: ${web_writable[*]}"
+    if ! run_remote_cmds "permission" "${perm_cmds[@]}"; then
+      die "failed to apply web-writable permissions"
+    fi
   fi
 fi
 
