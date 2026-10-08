@@ -20,7 +20,7 @@ The target server does **not** need composer installed:
 - `bash`, `rsync`, `ssh`, `openssh` client
 - `composer` (only needed for the production install / dev restore steps;
   use `--no-composer` to skip)
-- `curl` (only needed for `deploy --init`, to download the boilerplate
+- `curl` (only needed for `deploy.sh --init`, to download the boilerplate
   config from the public GitHub repository)
 - Access to the server's root account via the configured SSH key
 
@@ -32,42 +32,42 @@ needs to run.
 Download the script to the current directory and make it executable:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/superDuperCyberTechno/deploy/main/deploy -o ./deploy && chmod +x ./deploy
+curl -fsSL https://raw.githubusercontent.com/superDuperCyberTechno/deploy/main/deploy.sh -o ./deploy.sh && chmod +x ./deploy.sh
 ```
 
 The download comes from the public GitHub repository
 (`superDuperCyberTechno/deploy`, branch `main`). A failed download (e.g.
 offline) aborts without creating or overwriting a file. Afterwards the
-script can be run as `./deploy` or moved anywhere on `$PATH` for global
-use.
+script can be run as `./deploy.sh` or moved anywhere on `$PATH` for
+global use.
 
 ## Usage
 
 ```bash
-./extras/deploy/deploy --init            # fetch laravel boilerplate into ./deploy.conf
-./extras/deploy/deploy --init laravel    # same, explicit boilerplate name
-./extras/deploy/deploy --init -c out.conf  # write boilerplate to out.conf
-# edit deploy.conf, then:
-./extras/deploy/deploy                 # deploy the current directory
-./extras/deploy/deploy ../some/path    # deploy another source directory
-./extras/deploy/deploy --dry-run       # preview the sync (no changes)
-./extras/deploy/deploy --verbose       # verbose rsync output
-./extras/deploy/deploy --no-composer   # skip composer steps (sync vendor/ as-is)
-./extras/deploy/deploy -c /etc/deploy.conf   # custom config location
+./extras/deploy/deploy.sh --init            # fetch laravel boilerplate into ./deploy.conf.sh
+./extras/deploy/deploy.sh --init laravel    # same, explicit boilerplate name
+./extras/deploy/deploy.sh --init -c out.conf.sh  # write boilerplate to out.conf.sh
+# edit deploy.conf.sh, then:
+./extras/deploy/deploy.sh                 # deploy the current directory
+./extras/deploy/deploy.sh ../some/path    # deploy another source directory
+./extras/deploy/deploy.sh --dry-run       # preview the sync (no changes)
+./extras/deploy/deploy.sh --verbose       # verbose rsync output
+./extras/deploy/deploy.sh --no-composer   # skip composer steps (sync vendor/ as-is)
+./extras/deploy/deploy.sh -c /etc/deploy.conf.sh   # custom config location
 ```
 
-`deploy --init [name]` does not generate the boilerplate inline: it
-downloads `deploy.<name>.conf` from the public GitHub repository
+`deploy.sh --init [name]` does not generate the boilerplate inline: it
+downloads `deploy.<name>.conf.sh` from the public GitHub repository
 (`superDuperCyberTechno/deploy`, branch `main`) and writes it to
-`./deploy.conf` (overwrite with `--force`). The available boilerplate names
-are hardcoded in the script (the `BOILERPLATES` array) and listed in the help
-output; the matching `deploy.<name>.conf` files are served from the
-repository. To add a boilerplate, extend that array and commit its
-`deploy.<name>.conf` to the repository. A failed download (e.g. offline)
+`./deploy.conf.sh` (overwrite with `--force`). The available boilerplate
+names are hardcoded in the script (the `BOILERPLATES` array) and listed in
+the help output; the matching `deploy.<name>.conf.sh` files are served from
+the repository. To add a boilerplate, extend that array and commit its
+`deploy.<name>.conf.sh` to the repository. A failed download (e.g. offline)
 aborts with an error. The config location can also be set with the
 `DEPLOY_CONF` environment variable or `-c PATH`.
 
-## Configuration (`deploy.conf`)
+## Configuration (`deploy.conf.sh`)
 
 | Key | Required | Default | Purpose |
 |-----|----------|---------|---------|

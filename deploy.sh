@@ -16,18 +16,19 @@
 #      This also runs when any earlier step fails, so the local working copy
 #      is never left in a production state.
 #
-# Configuration is read from deploy.conf (generatable via: deploy --init).
-# See extras/deploy/README.md for documentation.
+# Configuration is read from deploy.conf.sh (generatable via: deploy.sh
+# --init). See extras/deploy/README.md for documentation.
 
 set -euo pipefail
 
 PROG="$(basename "$0")"
 readonly PROG
 
-# Available boilerplate config names. Hardcoded: the .conf files are not
-# shipped next to the script but downloaded from the public GitHub
-# repository on demand (deploy --init <name>). Extend this array — and add
-# the matching deploy.<name>.conf to the repository — to add a boilerplate.
+# Available boilerplate config names. Hardcoded: the .conf.sh files are
+# not shipped next to the script but downloaded from the public GitHub
+# repository on demand (deploy.sh --init <name>). Extend this array — and
+# add the matching deploy.<name>.conf.sh to the repository — to add a
+# boilerplate.
 readonly BOILERPLATES=("laravel")
 
 # GitHub repository (owner/name) hosting the boilerplate files.
@@ -37,7 +38,7 @@ readonly REPO="superDuperCyberTechno/deploy"
 readonly BASE_URL="https://raw.githubusercontent.com/${REPO}/main"
 
 # Hardcoded, project-agnostic ignore list. These are merged with the
-# "ignored" entries from deploy.conf for every sync. The Laravel-specific
+# "ignored" entries from deploy.conf.sh for every sync. The Laravel-specific
 # defaults (storage internals, sqlite database, cached bootstrap files) live
 # in the generated boilerplate config instead.
 readonly BASE_IGNORES=(
@@ -65,11 +66,11 @@ Syncs [source] (default: current directory) to a remote server with rsync.
 
 Options:
     --init [NAME]      Download a boilerplate config from GitHub
-                       (default: ./deploy.conf); NAME selects the
+                       (default: ./deploy.conf.sh); NAME selects the
                        boilerplate, default 'laravel'. Available:
                        $(available_boilerplates)
     -c, --config PATH  Use PATH as the config file (default: env
-                       DEPLOY_CONF or ./deploy.conf)
+                       DEPLOY_CONF or ./deploy.conf.sh)
     -n, --dry-run      Show what would be synced; skips composer steps and
                        remote commands
     -v, --verbose      Verbose rsync output
@@ -78,7 +79,7 @@ Options:
     -f, --force        With --init: overwrite an existing config file
     -h, --help         Show this help
 
-Config keys (deploy.conf):
+Config keys (deploy.conf.sh):
     deployment_domain       Domain/IP to connect to over SSH as root
                             (required)
     ssh_key                 Path to the SSH private key of the server root
@@ -128,7 +129,7 @@ available_boilerplates() {
 
 # --- Parse arguments -------------------------------------------------------
 
-CONF="${DEPLOY_CONF:-./deploy.conf}"
+CONF="${DEPLOY_CONF:-./deploy.conf.sh}"
 SRC="."
 MODE="deploy"
 BOILERPLATE="laravel"
@@ -200,7 +201,7 @@ if [[ "$MODE" == "init" ]]; then
 
   require curl
 
-  URL="${BASE_URL}/deploy.${BOILERPLATE}.conf"
+  URL="${BASE_URL}/deploy.${BOILERPLATE}.conf.sh"
   log "downloading ${URL}"
 
   # Download to a temporary file first, so a failed download never leaves

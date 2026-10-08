@@ -1,5 +1,6 @@
-# deploy.conf — Laravel boilerplate configuration for the deploy script.
-# Fetched by: deploy --init laravel
+#!/usr/bin/env bash
+# deploy.conf.sh — Laravel boilerplate configuration for the deploy script.
+# Fetched by: deploy.sh --init laravel
 
 # Domain or IP to connect to over SSH. The script always connects as the
 # server root user.
