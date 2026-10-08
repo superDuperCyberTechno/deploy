@@ -27,6 +27,20 @@ The target server does **not** need composer installed:
 The server needs only an SSH server and whatever the deployed app itself
 needs to run.
 
+## Installation
+
+Download the script to the current directory and make it executable:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/superDuperCyberTechno/deploy/main/deploy -o ./deploy && chmod +x ./deploy
+```
+
+The download comes from the public GitHub repository
+(`superDuperCyberTechno/deploy`, branch `main`). A failed download (e.g.
+offline) aborts without creating or overwriting a file. Afterwards the
+script can be run as `./deploy` or moved anywhere on `$PATH` for global
+use.
+
 ## Usage
 
 ```bash
