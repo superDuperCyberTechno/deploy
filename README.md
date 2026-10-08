@@ -22,6 +22,7 @@ the client, driven by the config's four command groups:
 ## Requirements (local machine)
 
 - `bash`, `rsync`, `ssh`, `openssh` client
+- `git` (optional; only the uncommitted-changes safety net uses it)
 - `composer` (only if the config's `pre_cmds_client` / `post_cmds_client`
   invoke it, as the Laravel boilerplate does)
 - `curl` (only needed for `deploy.sh --init`, to download the boilerplate
@@ -69,6 +70,16 @@ the repository. To add a boilerplate, extend that array and commit its
 `deploy.<name>.conf.sh` to the repository. A failed download (e.g. offline)
 aborts with an error. The config location can also be set with the
 `DEPLOY_CONF` environment variable or `-c PATH`.
+
+## Safety net
+
+Before anything (including the command groups) runs, `deploy.sh` checks the
+source directory for uncommitted git changes (`git status --porcelain`).
+When it finds any, it lists them and waits for confirmation — press Enter
+to continue, Ctrl+C to abort. The check needs `git` installed and the
+source inside a git work tree; it is skipped otherwise. `--dry-run` warns
+but never waits, and non-terminal stdin (e.g. CI) continues without
+confirmation so automated deployments do not hang.
 
 ## Configuration (`deploy.conf.sh`)
 

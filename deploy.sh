@@ -346,6 +346,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# --- Uncommitted changes safety net ----------------------------------------
+# Refuse to run silently on a dirty tree: list the uncommitted changes in
+# the source directory and wait for confirmation before the command groups
+# (which may modify the local environment) start. Only applies when git is
+# installed and the source is a work tree; --dry-run never waits.
+if command -v git >/dev/null 2>&1 \
+  && git -C "$SRC" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  mapfile -t dirty_lines < <(git -C "$SRC" status --porcelain 2>/dev/null || true)
+  if (( ${#dirty_lines[@]} > 0 )); then
+    warn "uncommitted changes detected in ${SRC}:"
+    for line in "${dirty_lines[@]}"; do
+      warn "  ${line}"
+    done
+    if (( DRY_RUN == 1 )); then
+      warn "dry run: no confirmation needed"
+    elif [[ -t 0 ]]; then
+      warn "Press Enter to continue or Ctrl+C to abort."
+      read -r
+    else
+      warn "stdin is not a terminal; continuing without confirmation"
+    fi
+  fi
+fi
+
 # --- Step 1: pre-sync commands ---------------------------------------------
 
 if (( DRY_RUN == 1 )); then
