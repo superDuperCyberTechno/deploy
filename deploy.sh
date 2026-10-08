@@ -56,10 +56,15 @@ readonly BASE_IGNORES=(
   "deploy.*.conf.sh"
 )
 
-# Permissions applied (rsync --chmod syntax) to the folders listed in the
-# web_writable config entry: directories group-writable with setgid (so
-# files created by the web server inherit the group), files group-writable.
-readonly WEB_WRITABLE_CHMOD="Du=rwx,Dg=rwxs,Do=rx,Fu=rw,Fg=rw,Fo=r"
+# Least-privilege permission defaults (rsync --chmod syntax). The main
+# sync confines directories to owner rwx / group rx / no world access;
+# file permission bits are preserved from the source, so executables keep
+# their +x. The web_writable pass then makes the listed folders
+# group-writable with setgid (files created by the web server inherit the
+# group), still without world access, while ownership stays with
+# deployment_user (root).
+readonly MAIN_DIR_CHMOD="Du=rwx,Dg=rx,Do="
+readonly WEB_WRITABLE_CHMOD="Du=rwx,Dg=rwxs,Do=,Fu=rw,Fg=rw,Fo="
 
 # Print the usage/help text.
 usage() {
@@ -88,7 +93,7 @@ Config keys (deploy.conf.sh):
     deployment_folder       Remote folder to sync into (default:
                             /srv/<project-name>)
     deployment_user         user:group rsync --chown of the synced files,
-                            e.g. www-data:www-data
+                            e.g. root:www-data
     web_writable            Bash array of folders made web-server writable
                             via rsync --chmod
     ignored                 Bash array of rsync exclude patterns (Laravel
@@ -399,9 +404,11 @@ printf '%s\n' "${PROG}" >> "$IGNORE_FILE"
 printf '%s\n' "${CONF##*/}" >> "$IGNORE_FILE"
 
 RSYNC_ARGS=(-az --delete --exclude-from="$IGNORE_FILE")
+RSYNC_ARGS+=(--chmod="$MAIN_DIR_CHMOD")
 if [[ -n "$deployment_user" ]]; then
-  # Root chowns transferred files on the receiver; without this the files
-  # would keep the local developer's uid once synced.
+  # Chown transferred files on the receiver; without this they would keep
+  # the local developer's uid once synced. Root ownership with the web
+  # server's group (e.g. root:www-data) is the least-privilege default.
   RSYNC_ARGS+=(--chown="$deployment_user")
 fi
 RSYNC_ARGS+=(-e "$SSH_CMD")

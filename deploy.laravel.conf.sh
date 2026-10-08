@@ -13,14 +13,18 @@ ssh_key="$HOME/.ssh/id_ed25519"
 # when left unset.
 # deployment_folder="/srv/<project-name>"
 
-# user:group assigned to every synced file via rsync --chown. Typically the
-# web server user; leave empty to keep the local file ownership.
-deployment_user="www-data:www-data"
+# user:group assigned to every synced file via rsync --chown. Root
+# ownership with the web server's group: the web server can read and
+# traverse the code via the group, but only write inside web_writable
+# (group-writable, setgid). Leave empty to keep everything root-owned —
+# then give the web server group access yourself, or it cannot read the
+# 750 directories.
+deployment_user="root:www-data"
 
-# Folders that must stay writable by the web server process. Permissions are
-# applied via rsync --chmod in a dedicated pass: directories become
-# group-writable with setgid (2775), files group-writable (664), the group
-# being deployment_user's group.
+# Folders the web server must write into at runtime. A dedicated rsync pass
+# makes them group-writable with setgid: directories 2770, files 660, group
+# being deployment_user's group — the web server writes via the group while
+# root keeps ownership. No world access.
 web_writable=(
     "storage"
     "bootstrap/cache"
