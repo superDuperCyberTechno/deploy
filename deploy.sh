@@ -102,9 +102,14 @@ log() {
   printf '[deploy] %s\n' "$*"
 }
 
-# Print a warning message to stderr.
+# Print a warning message to stderr. The message body is red when stderr
+# is a terminal, so piped/redirected output stays free of escape codes.
 warn() {
-  printf '[deploy][warn] %s\n' "$*" >&2
+  if [[ -t 2 ]]; then
+    printf '[deploy][warn] \033[31m%s\033[0m\n' "$*" >&2
+  else
+    printf '[deploy][warn] %s\n' "$*" >&2
+  fi
 }
 
 # Print an error message to stderr and exit with status 1.
