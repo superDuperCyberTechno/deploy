@@ -5,28 +5,31 @@ full web-apps, Laravel being the primary target) to a server with **rsync**
 over SSH, using **SSH keys as the sole credential**, acting as the server
 **root** user.
 
-The target server does **not** need composer installed:
+The target server does **not** need composer installed — installs run on
+the client, driven by the config's four command groups:
 
-1. `composer install --no-dev` runs **locally** before the sync, so the
-   synced `vendor/` is production-ready.
-2. The project is synced with `rsync -az --delete` (minus ignored files).
-3. `post_deployment_commands` run on the server (e.g. `php artisan optimize`).
-4. `composer install` re-installs the development environment locally. This
-   also happens when a step fails, so the local working copy is never left
-   in a production state without development tooling.
+1. `pre_cmds_client` run locally, in the source directory, before the sync
+   (e.g. `composer install --no-dev`), so the synced `vendor/` is
+   production-ready.
+2. `pre_cmds_server` run on the server (over SSH) before the sync.
+3. The project is synced with `rsync -az --delete` (minus ignored files).
+4. `post_cmds_server` run on the server (e.g. `php artisan optimize`).
+5. `post_cmds_client` run locally after the deployment (e.g. `composer
+   install` to restore the dev environment). These also run — once — when
+   any earlier step fails, so the local working copy is never left in a
+   production state without development tooling.
 
 ## Requirements (local machine)
 
 - `bash`, `rsync`, `ssh`, `openssh` client
-- `composer` (only needed for the production install / dev restore steps;
-  use `--no-composer` to skip)
+- `composer` (only if the config's `pre_cmds_client` / `post_cmds_client`
+  invoke it, as the Laravel boilerplate does)
 - `curl` (only needed for `deploy.sh --init`, to download the boilerplate
   config from the public GitHub repository)
 - Access to the server's root account via the configured SSH key
 
-The server needs only an SSH server, a `bash` shell (the
-`post_deployment_commands` run under it) and whatever the deployed app
-itself needs to run.
+The server needs only an SSH server, a `bash` shell (the server command
+groups run under it) and whatever the deployed app itself needs to run.
 
 ## Installation
 
@@ -53,7 +56,6 @@ global use.
 ./extras/deploy/deploy.sh ../some/path    # deploy another source directory
 ./extras/deploy/deploy.sh --dry-run       # preview the sync (no changes)
 ./extras/deploy/deploy.sh --verbose       # verbose rsync output
-./extras/deploy/deploy.sh --no-composer   # skip composer steps (sync vendor/ as-is)
 ./extras/deploy/deploy.sh -c /etc/deploy.conf.sh   # custom config location
 ```
 
@@ -78,7 +80,10 @@ aborts with an error. The config location can also be set with the
 | `deployment_user` | no | (empty) | `user:group` assigned to every synced file via rsync `--chown` (e.g. `www-data:www-data`); empty keeps local file ownership |
 | `web_writable` | no | (empty) | Bash array of folders made writable by the web server via rsync `--chmod` (dirs `2775` with setgid, files `664`) |
 | `ignored` | no | (empty) | Bash array of additional rsync exclude patterns |
-| `post_deployment_commands` | no | (empty) | Bash array of arbitrary shell commands run under bash on the server after cd-ing into `deployment_folder`; a failing command aborts the rest and triggers the local dev restore |
+| `pre_cmds_client` | no | (empty) | Bash array of shell commands run on the client (working directory: the source project) before the sync |
+| `pre_cmds_server` | no | (empty) | Bash array of shell commands run on the server (over SSH, in `deployment_folder`) before the sync |
+| `post_cmds_server` | no | (empty) | Bash array of shell commands run on the server (over SSH, in `deployment_folder`) after the sync; a failing command aborts the rest |
+| `post_cmds_client` | no | (empty) | Bash array of shell commands run on the client after the deployment; also run once via an exit trap when a step failed, so the local environment can be restored |
 
 Example:
 
@@ -95,9 +100,15 @@ ignored=(
     "storage/app/*"
     "storage/framework/cache/*"
 )
-post_deployment_commands=(
+pre_cmds_client=(
+    "composer install --no-dev --optimize-autoloader"
+)
+post_cmds_server=(
     "php artisan optimize"
     "php artisan migrate --force"
+)
+post_cmds_client=(
+    "composer install"
 )
 ```
 
@@ -115,7 +126,7 @@ Ownership and permissions are handled with rsync flags only:
   `bootstrap/cache`) get directories `2775` with setgid and files `664`,
   group being `deployment_user`'s group, so the web server can write into
   them and files created later inherit the group via setgid. This pass runs
-  before `post_deployment_commands`, so `php artisan optimize` can write
+  before `post_cmds_server`, so `php artisan optimize` can write
   `bootstrap/cache` right away.
 
 ## Ignore handling
@@ -138,7 +149,7 @@ Notes:
 
 - Because `.env` is always ignored, the server needs its own `.env` inside
   `deployment_folder`. The Laravel boilerplate checks for it before running
-  its `post_deployment_commands` and warns when it is missing; non-Laravel
+  its `post_cmds_server` group and warns when it is missing; non-Laravel
   projects add their own check to their config.
 - Excluded paths are also protected from `rsync --delete`, so server-side
   data (uploads, sessions, logs, databases) is never wiped by a sync.

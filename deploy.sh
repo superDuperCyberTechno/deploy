@@ -5,16 +5,16 @@
 # Syncs a project to a remote server using rsync over SSH. Access is made
 # with SSH keys only, as the server's root user.
 #
-# Flow:
-#   1. Install the production environment locally (composer install --no-dev).
-#      Required, because the target server has no composer installed and the
-#      synced vendor/ directory must be production-ready.
-#   2. Sync the project (minus ignored files) with rsync to the server.
-#   3. Run the post-deployment commands on the server (e.g. php artisan
-#      optimize).
-#   4. Re-install the development environment locally (composer install).
-#      This also runs when any earlier step fails, so the local working copy
-#      is never left in a production state.
+# Flow (the four command groups come from the config, so the script stays
+# project-agnostic):
+#   1. Run the pre-sync client commands (e.g. composer install --no-dev) in
+#      the source directory.
+#   2. Run the pre-sync server commands (over SSH).
+#   3. Sync the project (minus ignored files) with rsync to the server.
+#   4. Run the post-sync server commands (e.g. php artisan optimize).
+#   5. Run the post-sync client commands (e.g. composer install to restore
+#      the dev environment). These also run — once — when any earlier step
+#      fails, so the local working copy is never left in a production state.
 #
 # Configuration is read from deploy.conf.sh (generatable via: deploy.sh
 # --init). See extras/deploy/README.md for documentation.
@@ -71,11 +71,8 @@ Options:
                        $(available_boilerplates)
     -c, --config PATH  Use PATH as the config file (default: env
                        DEPLOY_CONF or ./deploy.conf.sh)
-    -n, --dry-run      Show what would be synced; skips composer steps and
-                       remote commands
+    -n, --dry-run      Show what would be synced; skips all command groups
     -v, --verbose      Verbose rsync output
-    --no-composer      Skip the production install / dev restore composer
-                       steps
     -f, --force        With --init: overwrite an existing config file
     -h, --help         Show this help
 
@@ -92,8 +89,14 @@ Config keys (deploy.conf.sh):
                             via rsync --chmod
     ignored                 Bash array of rsync exclude patterns (Laravel
                             defaults in boilerplate)
-    post_deployment_commands  Bash array of commands run on the server
-                              after a successful sync
+    pre_cmds_client         Bash array of commands run on the client before
+                            the sync
+    pre_cmds_server         Bash array of commands run on the server before
+                            the sync
+    post_cmds_server        Bash array of commands run on the server after
+                            the sync
+    post_cmds_client        Bash array of commands run on the client after
+                            the deployment (also on failure)
 EOF
 }
 
@@ -102,14 +105,39 @@ log() {
   printf '[deploy] %s\n' "$*"
 }
 
-# Print a warning message to stderr. The message body is red when stderr
-# is a terminal, so piped/redirected output stays free of escape codes.
+# Print a warning message to stderr.
 warn() {
-  if [[ -t 2 ]]; then
-    printf '[deploy][warn] \033[31m%s\033[0m\n' "$*" >&2
-  else
-    printf '[deploy][warn] %s\n' "$*" >&2
-  fi
+  printf '[deploy][warn] %s\n' "$*" >&2
+}
+
+# Run a config-declared command group on the client, in the source
+# directory. Each entry is arbitrary shell code; the first failing entry
+# aborts (nonzero status returned).
+run_client_cmds() {
+  local label="$1"; shift
+  local cmd
+  log "running ${#} ${label} command(s) on the client"
+  for cmd in "$@"; do
+    if ! (cd "$SRC" && bash -c "$cmd"); then
+      return 1
+    fi
+  done
+}
+
+# Run a config-declared command group on the server in one ssh session.
+# Entries build a bash script (set -e, cd'd into deployment_folder) fed to
+# the remote bash via stdin; a failing command aborts the rest.
+run_remote_cmds() {
+  local label="$1"; shift
+  local cmd remote
+  log "running ${#} ${label} command(s) on the server"
+  remote="set -e"
+  remote+=$'\n'"cd '$(shell_quote "$deployment_folder")'"
+  for cmd in "$@"; do
+    remote+=$'\n'"${cmd}"
+  done
+  ssh "${SSH_ARGS[@]}" "root@${deployment_domain}" "bash -s" \
+    <<< "$remote"
 }
 
 # Print an error message to stderr and exit with status 1.
@@ -140,7 +168,6 @@ MODE="deploy"
 BOILERPLATE="laravel"
 DRY_RUN=0
 VERBOSE=0
-NO_COMPOSER=0
 FORCE=0
 
 while (( $# > 0 )); do
@@ -161,7 +188,6 @@ while (( $# > 0 )); do
       ;;
     -n|--dry-run) DRY_RUN=1 ;;
     -v|--verbose) VERBOSE=1 ;;
-    --no-composer) NO_COMPOSER=1 ;;
     -f|--force) FORCE=1 ;;
     -h|--help)
       usage
@@ -241,7 +267,10 @@ deployment_folder=""
 deployment_user=""
 web_writable=()
 ignored=()
-post_deployment_commands=()
+pre_cmds_client=()
+pre_cmds_server=()
+post_cmds_server=()
+post_cmds_client=()
 
 set +u
 if ! source "$CONF" 2>/dev/null; then
@@ -279,45 +308,9 @@ fi
 require rsync
 require ssh
 
-if ! command -v composer >/dev/null 2>&1; then
-  warn "composer not found locally — skipping the production install / dev" \
-    "restore; vendor/ synced as-is"
-  NO_COMPOSER=1
-fi
-
 log "config: ${deployment_domain} -> ${deployment_folder} (key: ${ssh_key})"
-# --- State for dev-environment restore (also on failure) -------------------
 
-IGNORE_FILE="$(mktemp)" || die "failed to create temporary ignore file"
-
-PRODUCTION_VENDOR=0
-RESTORED=0
-
-# Restore the local development environment and remove the transient ignore
-# file when the script exits.
-cleanup() {
-  if (( PRODUCTION_VENDOR == 1 )) && (( RESTORED == 0 )); then
-    warn "restoring local development environment (composer install)"
-    composer install --quiet --no-interaction --no-progress || true
-  fi
-  rm -f "$IGNORE_FILE"
-}
-trap cleanup EXIT
-
-# --- Step 1: production environment (local) --------------------------------
-
-if (( DRY_RUN == 1 )); then
-  log "dry run: skipping composer steps and remote commands"
-elif (( NO_COMPOSER == 1 )); then
-  log "skipping composer production install (--no-composer)"
-else
-  log "installing production dependencies locally (composer install --no-dev)"
-  composer install --quiet --no-dev --optimize-autoloader --prefer-dist \
-    --no-interaction --no-progress
-  PRODUCTION_VENDOR=1
-fi
-
-# --- Step 2: sync with rsync ----------------------------------------------
+# --- SSH connection (used by the command groups and the sync) --------------
 
 # Common SSH options: BatchMode keeps ssh from hanging on prompts,
 # ConnectTimeout fails fast on unreachable hosts.
@@ -327,6 +320,45 @@ readonly SSH_BASE_ARGS=(-o BatchMode=yes -o ConnectTimeout=15)
 # shell. SSH_ARGS is the array form used for direct ssh calls.
 SSH_CMD="ssh -i $(printf '%q' "$ssh_key") ${SSH_BASE_ARGS[*]}"
 SSH_ARGS=(-i "$ssh_key" "${SSH_BASE_ARGS[@]}")
+
+# --- Command-group state (post_cmds_client also runs on failure) -----------
+
+IGNORE_FILE="$(mktemp)" || die "failed to create temporary ignore file"
+
+POST_CMDS_CLIENT_RUN=0
+
+# Run the post-sync client commands once when the script exits before its
+# regular post-sync step (i.e. a step failed), so configs that modified the
+# local environment (e.g. composer --no-dev) can restore it. Remove the
+# transient ignore file in any case.
+cleanup() {
+  if (( POST_CMDS_CLIENT_RUN == 0 )) && (( DRY_RUN == 0 )) \
+    && (( ${#post_cmds_client[@]} > 0 )); then
+    log "deployment did not complete; running post-sync client commands" \
+      "(restore)"
+    run_client_cmds "post-sync" "${post_cmds_client[@]}" >&2 || true
+  fi
+  rm -f "$IGNORE_FILE"
+}
+trap cleanup EXIT
+
+# --- Step 1: pre-sync commands ---------------------------------------------
+
+if (( DRY_RUN == 1 )); then
+  log "dry run: skipping all command groups"
+elif (( ${#pre_cmds_client[@]} > 0 )); then
+  if ! run_client_cmds "pre-sync" "${pre_cmds_client[@]}"; then
+    die "pre-sync client command failed"
+  fi
+fi
+
+if (( DRY_RUN == 0 )) && (( ${#pre_cmds_server[@]} > 0 )); then
+  if ! run_remote_cmds "pre-sync" "${pre_cmds_server[@]}"; then
+    die "pre-sync server command failed"
+  fi
+fi
+
+# --- Step 2: sync with rsync ----------------------------------------------
 
 printf '%s\n' "${BASE_IGNORES[@]}" > "$IGNORE_FILE"
 if (( ${#ignored[@]} > 0 )); then
@@ -350,14 +382,14 @@ fi
 log "syncing ${SRC}/ -> root@${deployment_domain}:${deployment_folder}/"
 if ! rsync "${RSYNC_ARGS[@]}" "${SRC}/" \
   "root@${deployment_domain}:${deployment_folder}/"; then
-  die "rsync failed; local dev environment is being restored"
+  die "rsync failed"
 fi
 
 # --- Web-server writable folders -------------------------------------------
 # rsync --chmod is global, so the folders listed in web_writable get their
 # permissions via a dedicated, filter-restricted second pass (dirs and files
-# only under the listed paths). Run before the post-deployment commands, so
-# e.g. php artisan optimize can write bootstrap/cache immediately.
+# only under the listed paths). Run before the post-sync server commands,
+# so e.g. php artisan optimize can write bootstrap/cache immediately.
 
 if (( ${#web_writable[@]} > 0 )); then
   CHMOD_ARGS=(-a --chmod="$WEB_WRITABLE_CHMOD")
@@ -381,47 +413,28 @@ if (( ${#web_writable[@]} > 0 )); then
 
   if ! rsync "${CHMOD_ARGS[@]}" "${SRC}/" \
     "root@${deployment_domain}:${deployment_folder}/"; then
-    die "permission pass failed; local dev environment is being restored"
+    die "permission pass failed"
   fi
 fi
 
-# --- Step 3: post-deployment commands (remote) -----------------------------
-# Each config entry is arbitrary shell code (conditionals, loops, ...)
-# executed under bash on the server after cd-ing into deployment_folder. A
-# failing command aborts the remaining ones (set -e) and triggers the local
-# dev-environment restore below. Project-specific checks (e.g. the Laravel
-# .env existence check) belong in the boilerplate config, not here.
+# --- Step 3: post-sync server commands -------------------------------------
 
-if (( DRY_RUN == 1 )); then
-  log "dry run: skipping post-deployment commands"
-elif (( ${#post_deployment_commands[@]} > 0 )); then
-  log "running ${#post_deployment_commands[@]} post-deployment command(s)" \
-    "on the server"
-
-  # Build a remote bash script locally and feed it to the remote bash via
-  # stdin, so entries may contain multi-line compound commands.
-  remote="set -e"
-  remote+=$'\n'"cd '$(shell_quote "$deployment_folder")'"
-  for cmd in "${post_deployment_commands[@]}"; do
-    remote+=$'\n'"${cmd}"
-  done
-
-  if ! ssh "${SSH_ARGS[@]}" "root@${deployment_domain}" "bash -s" \
-    <<< "$remote"; then
-    die "post-deployment commands failed; local dev environment is being" \
-      "restored"
+if (( DRY_RUN == 0 )) && (( ${#post_cmds_server[@]} > 0 )); then
+  if ! run_remote_cmds "post-sync" "${post_cmds_server[@]}"; then
+    die "post-sync server command failed"
   fi
-else
-  log "no post-deployment commands configured"
 fi
 
-# --- Step 4: development environment (local) -------------------------------
+# --- Step 4: post-sync client commands -------------------------------------
+# Post-sync client commands that did not run here (because a step failed or
+# the script never reached this point) are executed by the cleanup trap, so
+# POST_CMDS_CLIENT_RUN is set before running to avoid a double execution.
 
-if (( PRODUCTION_VENDOR == 1 )); then
-  log "re-installing local development environment (composer install)"
-  composer install --quiet --no-interaction --no-progress
-  RESTORED=1
-  PRODUCTION_VENDOR=0
+if (( DRY_RUN == 0 )) && (( ${#post_cmds_client[@]} > 0 )); then
+  POST_CMDS_CLIENT_RUN=1
+  if ! run_client_cmds "post-sync" "${post_cmds_client[@]}"; then
+    die "post-sync client command failed"
+  fi
 fi
 
 log "deployment complete"

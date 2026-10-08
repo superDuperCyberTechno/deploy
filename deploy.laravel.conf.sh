@@ -45,14 +45,33 @@ ignored=(
     "public/hot"
 )
 
-# Bash commands executed on the server after a successful sync, in order.
-# Each entry is arbitrary shell code run under bash on the server after
-# cd-ing into deployment_folder; a failing command aborts the rest. The
-# server has no composer, so vendor/ is already production-ready at this
-# point.
-post_deployment_commands=(
+# ---- Command groups -------------------------------------------------------
+# Commands run on the client machine, in the source directory, before the
+# sync. Build the production vendor/ locally: the target server has no
+# composer, so the synced vendor/ must already be production-ready.
+pre_cmds_client=(
+    "composer install --quiet --no-dev --optimize-autoloader --prefer-dist --no-interaction --no-progress"
+)
+
+# Commands run on the server (over SSH, cd'd into deployment_folder) before
+# the sync. Nothing needed for Laravel.
+pre_cmds_server=()
+
+# Commands run on the server after the sync, in order. Each entry is
+# arbitrary shell code (conditionals, loops, ...) run under bash; a failing
+# command aborts the rest.
+post_cmds_server=(
     # .env is always excluded from the sync, so the server needs its own.
-    # Warn (remotely) when it is missing before running artisan.
-    "if [ ! -f .env ]; then echo '[deploy][warn] no .env found on the server - artisan commands may fail'; fi"
+    # Warn (remotely) when it is missing before running artisan. The warn
+    # goes to stderr with the [deploy][warn] prefix, like local warnings.
+    "if [ ! -f .env ]; then echo '[deploy][warn] no .env found on the server - artisan commands may fail' >&2; fi"
     "php artisan optimize"
+)
+
+# Commands run on the client after the deployment, in the source directory.
+# Also run once when a step failed (exit trap), so configs that changed the
+# local environment can restore it. Restore the development vendor/ the
+# pre_cmds_client step replaced.
+post_cmds_client=(
+    "composer install --quiet --no-interaction --no-progress"
 )
