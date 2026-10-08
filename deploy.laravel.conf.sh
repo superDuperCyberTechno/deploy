@@ -26,6 +26,7 @@ deployment_user="root:www-data"
 # directories 2770, files 660, ownership deployment_user — the web server
 # writes via the group while root keeps ownership. No world access.
 web_writable=(
+    # "database" #uncomment this if you use the SQLite database
     "storage"
     "bootstrap/cache"
 )
