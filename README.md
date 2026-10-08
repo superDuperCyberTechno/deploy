@@ -136,7 +136,12 @@ Every sync applies a **hardcoded, project-agnostic ignore list**:
 ```
 .git/  .env  .env.*  node_modules/  .DS_Store  Thumbs.db
 .phpunit.result.cache  .phpunit.cache
+deploy.*.conf.sh
 ```
+
+The **deploy toolchain** is never synced: the config files
+(`deploy.*.conf.sh`), plus the script itself and the active config appended
+by name at sync time, so a renamed script stays excluded as well.
 
 The **Laravel defaults** live in the generated boilerplate config and cover
 the storage/ internals (`storage/app/*`, `storage/framework/{cache,sessions,views}/*`,

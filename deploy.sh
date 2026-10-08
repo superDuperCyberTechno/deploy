@@ -40,7 +40,10 @@ readonly BASE_URL="https://raw.githubusercontent.com/${REPO}/main"
 # Hardcoded, project-agnostic ignore list. These are merged with the
 # "ignored" entries from deploy.conf.sh for every sync. The Laravel-specific
 # defaults (storage internals, sqlite database, cached bootstrap files) live
-# in the generated boilerplate config instead.
+# in the generated boilerplate config instead. The toolchain config files
+# (deploy.conf.sh, deploy.<name>.conf.sh) are excluded here; the script
+# itself and the active config are appended by name at sync time, so a
+# renamed script stays excluded too.
 readonly BASE_IGNORES=(
   ".git/"
   ".env"
@@ -50,6 +53,7 @@ readonly BASE_IGNORES=(
   "Thumbs.db"
   ".phpunit.result.cache"
   ".phpunit.cache"
+  "deploy.*.conf.sh"
 )
 
 # Permissions applied (rsync --chmod syntax) to the folders listed in the
@@ -364,6 +368,11 @@ printf '%s\n' "${BASE_IGNORES[@]}" > "$IGNORE_FILE"
 if (( ${#ignored[@]} > 0 )); then
   printf '%s\n' "${ignored[@]}" >> "$IGNORE_FILE"
 fi
+# Always exclude the deploy toolchain itself: the script under its current
+# name and the active config. Patterns without a slash match at any depth,
+# so this holds even when these files are committed in a subfolder.
+printf '%s\n' "${PROG}" >> "$IGNORE_FILE"
+printf '%s\n' "${CONF##*/}" >> "$IGNORE_FILE"
 
 RSYNC_ARGS=(-az --delete --exclude-from="$IGNORE_FILE")
 if [[ -n "$deployment_user" ]]; then
