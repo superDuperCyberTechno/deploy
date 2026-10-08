@@ -24,6 +24,11 @@ set -euo pipefail
 PROG="$(basename "$0")"
 readonly PROG
 
+# Semantic version (https://semver.org): bump MAJOR on breaking changes,
+# MINOR on backward-compatible additions, PATCH on backward-compatible
+# fixes.
+readonly VERSION="1.0.0"
+
 # Available boilerplate config names. Hardcoded: the .conf.sh files are
 # not shipped next to the script but downloaded from the public GitHub
 # repository on demand (deploy.sh --init <name>). Extend this array — and
@@ -69,6 +74,8 @@ readonly WEB_WRITABLE_CHMOD="Du=rwx,Dg=rwxs,Do=,Fu=rw,Fg=rw,Fo="
 # Print the usage/help text.
 usage() {
   cat <<EOF
+$PROG ${VERSION} — rsync deployment tool
+
 Usage: $PROG [options] [source]
 
 Syncs [source] (default: current directory) to a remote server with rsync.
@@ -82,6 +89,7 @@ Options:
                        DEPLOY_CONF or ./deploy.conf.sh)
     -n, --dry-run      Show what would be synced; skips all command groups
     -v, --verbose      Verbose rsync output
+    -V, --version      Show version and exit
     -f, --force        With --init: overwrite an existing config file
     -h, --help         Show this help
 
@@ -197,6 +205,7 @@ while (( $# > 0 )); do
       ;;
     -n|--dry-run) DRY_RUN=1 ;;
     -v|--verbose) VERBOSE=1 ;;
+    -V|--version) printf '%s %s\n' "$PROG" "$VERSION"; exit 0 ;;
     -f|--force) FORCE=1 ;;
     -h|--help)
       usage

@@ -57,6 +57,7 @@ global use.
 ./extras/deploy/deploy.sh ../some/path    # deploy another source directory
 ./extras/deploy/deploy.sh --dry-run       # preview the sync (no changes)
 ./extras/deploy/deploy.sh --verbose       # verbose rsync output
+./extras/deploy/deploy.sh --version       # print the version
 ./extras/deploy/deploy.sh -c /etc/deploy.conf.sh   # custom config location
 ```
 
@@ -80,6 +81,13 @@ to continue, Ctrl+C to abort. The check needs `git` installed and the
 source inside a git work tree; it is skipped otherwise. `--dry-run` warns
 but never waits, and non-terminal stdin (e.g. CI) continues without
 confirmation so automated deployments do not hang.
+
+## Versioning
+
+`deploy.sh` follows [semantic versioning](https://semver.org): a `MAJOR`
+bump for breaking changes (config keys, flags, behavior), `MINOR` for
+backward-compatible additions, `PATCH` for backward-compatible fixes. The
+current version is printed by `deploy.sh --version`.
 
 ## Configuration (`deploy.conf.sh`)
 
