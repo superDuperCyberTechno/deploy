@@ -29,6 +29,9 @@
 #      fails, so the local working copy is never left in a production
 #      state.
 #
+#   deploy.sh --rollback skips all of this: it only switches the symlink
+#   back to the newest earlier snapshot (no sync, no commands, no pruning).
+#
 # Configuration is read from deploy.conf.sh (generatable via: deploy.sh
 # --init). See extras/deploy/README.md for documentation.
 
@@ -40,7 +43,7 @@ readonly PROG
 # Semantic version (https://semver.org): bump MAJOR on breaking changes,
 # MINOR on backward-compatible additions, PATCH on backward-compatible
 # fixes.
-readonly VERSION="2.0.1"
+readonly VERSION="2.1.0"
 
 # Available boilerplate config names. Hardcoded: the .conf.sh files are
 # not shipped next to the script but downloaded from the public GitHub
@@ -88,7 +91,8 @@ $PROG ${VERSION} — rsync deployment tool
 
 Usage: $PROG [options] [source]
 
-Syncs [source] (default: current directory) to a remote server with rsync.
+Syncs [source] (default: current directory) to a remote server with rsync,
+or rolls the live symlink back with --rollback.
 
 Options:
     --init [NAME]      Download a boilerplate config from GitHub
@@ -97,6 +101,9 @@ Options:
                        $(available_boilerplates)
     -c, --config PATH  Use PATH as the config file (default: env
                        DEPLOY_CONF or ./deploy.conf.sh)
+    -r, --rollback     Switch the deployment symlink back to the newest
+                       earlier snapshot (requires the config; no sync
+                       runs)
     -n, --dry-run      Show what would be synced; skips all command groups
     -v, --verbose      Verbose rsync output
     -V, --version      Show version and exit
@@ -172,6 +179,24 @@ run_remote_cmds() {
     <<< "$remote"
 }
 
+# Print the state of the deployment_folder on the server: the resolved
+# target path when it is a symlink, 'DIR' for a plain directory, or
+# 'NONE' when the folder does not exist. Read-only, so it also runs in
+# --dry-run; exits nonzero when ssh fails. Used by both the deploy flow
+# and --rollback.
+read_active_snapshot() {
+  local remote
+  remote="set -e"
+  remote+=$'\n'"if [ -L '$(shell_quote "$deployment_folder")' ]; then"
+  remote+=$'\n'"  readlink -f '$(shell_quote "$deployment_folder")'"
+  remote+=$'\n'"elif [ -d '$(shell_quote "$deployment_folder")' ]; then"
+  remote+=$'\n'"  printf '%s\\n' 'DIR'"
+  remote+=$'\n'"else"
+  remote+=$'\n'"  printf '%s\\n' 'NONE'"
+  remote+=$'\n'"fi"
+  ssh "${SSH_ARGS[@]}" "root@${deployment_domain}" "bash -s" <<< "$remote"
+}
+
 # Print an error message to stderr and exit with status 1.
 die() {
   printf '[deploy][error] %s\n' "$*" >&2
@@ -236,6 +261,7 @@ while (( $# > 0 )); do
         shift
       fi
       ;;
+    -r|--rollback) MODE="rollback" ;;
     -c|--config)
       if (( $# < 2 )); then
         die "option ${1} requires a value"
@@ -371,7 +397,9 @@ if [[ -z "$deployment_folder" ]]; then
   log "deployment_folder unset, defaulting to ${deployment_folder}"
 fi
 
-require rsync
+if [[ "$MODE" != "rollback" ]]; then
+  require rsync
+fi
 require ssh
 
 log "config: ${deployment_domain} -> ${deployment_folder} (key: ${ssh_key})"
@@ -386,6 +414,75 @@ readonly SSH_BASE_ARGS=(-o BatchMode=yes -o ConnectTimeout=15)
 # shell. SSH_ARGS is the array form used for direct ssh calls.
 SSH_CMD="ssh -i $(printf '%q' "$ssh_key") ${SSH_BASE_ARGS[*]}"
 SSH_ARGS=(-i "$ssh_key" "${SSH_BASE_ARGS[@]}")
+
+# --- Rollback ---------------------------------------------------------------
+# --rollback does one thing: point the deployment_folder symlink back at
+# the newest earlier snapshot (deploy order by top-level mtime). No sync,
+# no command groups, no pruning, no git checks — only the config and ssh
+# are needed. The symlink switch is atomic, exactly like a deploy's last
+# step, so the web server keeps serving the active snapshot throughout.
+if [[ "$MODE" == "rollback" ]]; then
+  ACTIVE_SNAPSHOT=""
+  if ! ACTIVE="$(read_active_snapshot)"; then
+    die "failed to read the active snapshot on the server"
+  fi
+  case "$ACTIVE" in
+    ""|NONE)
+      die "no active deployment found on the server; nothing to roll back"
+      ;;
+    DIR)
+      die "${deployment_folder} is a plain directory — expected a symlink" \
+        "pointing at a snapshot (only the snapshot layout is supported)"
+      ;;
+  esac
+  ACTIVE_SNAPSHOT="$ACTIVE"
+  log "active snapshot on the server: ${ACTIVE_SNAPSHOT}"
+
+  # Select the newest snapshot deployed strictly before the active one,
+  # by deploy order (top-level mtime), so repeated rollbacks walk the
+  # deploy history one step back at a time. The snapshot-name glob suffix
+  # must stay unquoted so it expands; the dir/base parts are shell-quoted
+  # separately. Prints the target path, or 'NONE' when no earlier
+  # snapshot exists.
+  hex32=""
+  for (( i = 0; i < 32; i++ )); do hex32+="[0-9a-f]"; done
+  remote="set -e"
+  remote+=$'\n'"active_mtime=\"\$(stat -c '%y' '$(shell_quote "$ACTIVE_SNAPSHOT")' 2>/dev/null || printf -- 0)\""
+  remote+=$'\n'"rollback_target=\"\$(for s in '$(shell_quote "$(dirname "$deployment_folder")")'/'$(shell_quote "$(basename "$deployment_folder")")'-${hex32}; do"
+  remote+=$'\n'"  [ -d \"\$s\" ] || continue"
+  remote+=$'\n'"  m=\"\$(stat -c '%y' \"\$s\" 2>/dev/null || printf -- 0)\""
+  remote+=$'\n'"  [[ \$m < \$active_mtime ]] || continue"
+  remote+=$'\n'"  printf '%s\\t%s\\n' \"\$m\" \"\$s\""
+  remote+=$'\n'"done | sort | tail -n 1 | cut -f2-)\""
+  remote+=$'\n'"if [ -n \"\$rollback_target\" ]; then"
+  remote+=$'\n'"  printf '%s\\n' \"\$rollback_target\""
+  remote+=$'\n'"else"
+  remote+=$'\n'"  printf '%s\\n' 'NONE'"
+  remote+=$'\n'"fi"
+  if ! TARGET="$(ssh "${SSH_ARGS[@]}" "root@${deployment_domain}" "bash -s" \
+    <<< "$remote")"; then
+    die "failed to read the rollback candidates on the server"
+  fi
+
+  if [[ "$TARGET" == "NONE" ]]; then
+    die "no earlier snapshot found next to ${deployment_folder}; nothing" \
+      "to roll back to"
+  fi
+
+  if (( DRY_RUN == 1 )); then
+    log "dry run: would switch ${deployment_folder} -> ${TARGET}"
+    exit 0
+  fi
+
+  # Atomic switch, same as the deploy's final step; nothing else changes,
+  # so the next deploy prunes as usual.
+  if ! ssh "${SSH_ARGS[@]}" "root@${deployment_domain}" \
+    "ln -sfn $(shell_quote "$TARGET") $(shell_quote "$deployment_folder")"; then
+    die "failed to switch the deployment symlink to ${TARGET}"
+  fi
+  log "deployment rolled back: ${deployment_folder} -> ${TARGET}"
+  exit 0
+fi
 
 # --- Snapshot id and paths ------------------------------------------------
 # The snapshot id must be a pure function of the local source state, so a
@@ -442,20 +539,11 @@ trap cleanup EXIT
 
 # --- Active snapshot check --------------------------------------------------
 # The deployment_folder symlink names the live snapshot. Read its target:
-# a missing folder (or a dangling symlink) is a first deploy with no
-# active snapshot; a plain directory is a legacy/unsupported layout and
-# aborts. Read-only, so it also runs in --dry-run.
-remote="set -e"
-remote+=$'\n'"if [ -L '$(shell_quote "$deployment_folder")' ]; then"
-remote+=$'\n'"  readlink -f '$(shell_quote "$deployment_folder")'"
-remote+=$'\n'"elif [ -d '$(shell_quote "$deployment_folder")' ]; then"
-remote+=$'\n'"  printf '%s\\n' 'DIR'"
-remote+=$'\n'"else"
-remote+=$'\n'"  printf '%s\\n' 'NONE'"
-remote+=$'\n'"fi"
+# a missing folder is a first deploy with no active snapshot; a plain
+# directory is a legacy/unsupported layout and aborts. Read-only, so it
+# also runs in --dry-run.
 ACTIVE_SNAPSHOT=""
-if ! ACTIVE="$(ssh "${SSH_ARGS[@]}" "root@${deployment_domain}" "bash -s" \
-  <<< "$remote")"; then
+if ! ACTIVE="$(read_active_snapshot)"; then
   die "failed to read the active snapshot on the server"
 fi
 

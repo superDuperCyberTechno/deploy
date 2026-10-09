@@ -73,6 +73,8 @@ global use.
 ./extras/deploy/deploy.sh ../some/path    # deploy another source directory
 ./extras/deploy/deploy.sh --dry-run       # preview the sync (no changes)
 ./extras/deploy/deploy.sh --verbose       # verbose rsync output
+./extras/deploy/deploy.sh --rollback      # switch the live symlink back to the
+                                          # newest earlier snapshot
 ./extras/deploy/deploy.sh --version       # print the version
 ./extras/deploy/deploy.sh -c /etc/deploy.conf.sh   # custom config location
 ```
@@ -96,12 +98,21 @@ makes the symlink point at the newest one. A snapshot is only ever built
 for its exact source state (the already-live check prevents rebuilding the
 active one), never modified in place afterwards.
 
-Rollback is a one-liner on the server: point the symlink back at an older
-snapshot, e.g.
+Rollback switches the symlink back to the newest earlier snapshot, in one
+command:
 
 ```bash
-ln -sfn /srv/myapp<old-snapshot-id> /srv/myapp
+./deploy.sh --rollback
 ```
+
+It does exactly one thing: the atomic symlink switch to the snapshot that
+was serving right before the last deploy (deploy order, by snapshot
+mtime). No sync, no command groups, no pruning — the snapshot carries
+its own `.env`/`storage` state, and the next deploy prunes old snapshots
+as usual. `--rollback` needs only the config (`deployment_domain`,
+`ssh_key`, `deployment_folder`), not git or a source directory. It aborts
+when there is no active deployment (first deploy) or no earlier snapshot
+left.
 
 Old snapshots are pruned after each successful deploy: the
 `keep_snapshots` newest previous deployments (default `1`) are kept
