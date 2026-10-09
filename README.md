@@ -248,3 +248,8 @@ Notes:
   skipped with a message)
 - `1` — configuration, tooling, rsync, or post-deployment failure (the
   local dev environment is restored before exiting)
+
+## AI use
+
+The majority of this codebase were written with the assistance of an AI coding
+assistant.
