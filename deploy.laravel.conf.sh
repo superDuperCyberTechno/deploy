@@ -11,7 +11,7 @@ ssh_key="$HOME/.ssh/id_ed25519"
 
 # Symlink path of the live site on the server (what the web server
 # serves). Defaults to /srv/<project-name> when left unset. Each deploy
-# builds a snapshot folder <name><snapshot id> next to it and switches
+# builds a snapshot folder <name>-<snapshot id> next to it and switches
 # this symlink to the newest snapshot as the last server-side step.
 # deployment_folder="/srv/<project-name>"
 

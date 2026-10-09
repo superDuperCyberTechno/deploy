@@ -20,7 +20,7 @@ builds a fresh snapshot and switches the symlink atomically:
    production-ready; `pre_cmds_server` run on the server (in the currently
    active deployment).
 4. The active snapshot is copied to a new snapshot folder
-   `<project-name><snapshot id>` (first deploy: created empty) and the
+   `<project-name>-<snapshot id>` (first deploy: created empty) and the
    project is synced into it with `rsync -az --delete` (minus ignored
    files). Copying first carries server-side state (`.env`, `storage/`, …)
    into the new snapshot.
@@ -91,7 +91,7 @@ aborts with an error. The config location can also be set with the
 ## Snapshots and rollback
 
 Every successful deploy leaves a snapshot folder
-`<project-name><snapshot id>` next to the `deployment_folder` symlink and
+`<project-name>-<snapshot id>` next to the `deployment_folder` symlink and
 makes the symlink point at the newest one. A snapshot is only ever built
 for its exact source state (the already-live check prevents rebuilding the
 active one), never modified in place afterwards.
@@ -132,7 +132,7 @@ current version is printed by `deploy.sh --version`.
 |-----|----------|---------|---------|
 | `deployment_domain` | yes | — | Domain/IP to connect to over SSH as root |
 | `ssh_key` | yes | — | Path to the SSH private key of the server root user |
-| `deployment_folder` | no | `/srv/<project-name>` | Symlink path of the live site on the server (what the web server serves); snapshot folders live next to it as `<name><snapshot id>` |
+| `deployment_folder` | no | `/srv/<project-name>` | Symlink path of the live site on the server (what the web server serves); snapshot folders live next to it as `<name>-<snapshot id>` |
 | `keep_snapshots` | no | `1` | Number of previous snapshots kept on the server after a deploy, alongside the active one (never pruned); `0` keeps all |
 | `deployment_user` | no | (empty) | `user:group` assigned to every synced file via rsync `--chown` (e.g. `root:www-data`); empty keeps root ownership — without the web group the web server cannot read the `750` directories |
 | `web_writable` | no | (empty) | Bash array of folders made group-writable over SSH (dirs `2770` with setgid, files `660`, no world access, ownership `deployment_user`) |

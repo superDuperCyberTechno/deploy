@@ -8,7 +8,7 @@
 # Flow (the four command groups come from the config, so the script stays
 # project-agnostic). The web server serves the project through the
 # deployment_folder symlink, which always points at the currently active
-# snapshot folder (<name><snapshot id>). Every deploy builds a fresh
+# snapshot folder (<name>-<snapshot id>). Every deploy builds a fresh
 # snapshot and then switches the symlink:
 #   1. Compute the local snapshot id from the git state (latest commit id
 #      plus every dirty file with its mtime).
@@ -18,7 +18,7 @@
 #   3. Run the pre-sync client commands (e.g. composer install --no-dev)
 #      in the source directory, then the pre-sync server commands.
 #   4. Copy the active snapshot to a new folder named
-#      <basename><snapshot id> (first deploy: create it empty) and sync
+#      <basename>-<snapshot id> (first deploy: create it empty) and sync
 #      the project (minus ignored files) into it with rsync.
 #   5. Run the web-writable permission pass and the post-sync server
 #      commands (e.g. php artisan optimize) inside the new snapshot.
@@ -40,7 +40,7 @@ readonly PROG
 # Semantic version (https://semver.org): bump MAJOR on breaking changes,
 # MINOR on backward-compatible additions, PATCH on backward-compatible
 # fixes.
-readonly VERSION="2.0.0"
+readonly VERSION="2.0.1"
 
 # Available boilerplate config names. Hardcoded: the .conf.sh files are
 # not shipped next to the script but downloaded from the public GitHub
@@ -110,7 +110,7 @@ Config keys (deploy.conf.sh):
                             user (required)
     deployment_folder       Symlink path of the live site on the server
                             (default: /srv/<project-name>); snapshot
-                            folders live next to it as <name><snapshot id>
+                            folders live next to it as <name>-<snapshot id>
     keep_snapshots          Number of previous snapshots kept on the
                             server, next to the active one (default 1;
                             0 keeps all; the active is never pruned)
@@ -391,7 +391,7 @@ SSH_ARGS=(-i "$ssh_key" "${SSH_BASE_ARGS[@]}")
 # The snapshot id must be a pure function of the local source state, so a
 # second deploy of an unmodified source can be detected and skipped.
 # Deriving it requires git (commit id + dirty-file list); the snapshot is
-# named <basename-of-deployment_folder><id> and lives next to the
+# named <basename-of-deployment_folder>-<id> and lives next to the
 # deployment_folder symlink.
 if ! command -v git >/dev/null 2>&1; then
   die "required tool not found: git (snapshot ids are built from the" \
@@ -404,7 +404,7 @@ SNAPSHOT_HASH="$(snapshot_hash)" || die "failed to compute snapshot id"
 if [[ -z "$SNAPSHOT_HASH" ]]; then
   die "failed to compute snapshot id"
 fi
-SNAPSHOT_DIR="$(dirname "$deployment_folder")/$(basename "$deployment_folder")${SNAPSHOT_HASH}"
+SNAPSHOT_DIR="$(dirname "$deployment_folder")/$(basename "$deployment_folder")-${SNAPSHOT_HASH}"
 SNAPSHOT_BUILT=0
 SNAPSHOT_ACTIVE=0
 log "snapshot id ${SNAPSHOT_HASH} -> ${SNAPSHOT_DIR}"
@@ -659,7 +659,7 @@ else
     for (( i = 0; i < 32; i++ )); do hex32+="[0-9a-f]"; done
     # The snapshot-name glob suffix must stay unquoted so it actually
     # expands; the dir/base parts are shell-quoted separately.
-    remote+=$'\n'"for s in '$(shell_quote "$(dirname "$deployment_folder")")'/'$(shell_quote "$(basename "$deployment_folder")")'"${hex32}"; do"
+    remote+=$'\n'"for s in '$(shell_quote "$(dirname "$deployment_folder")")'/'$(shell_quote "$(basename "$deployment_folder")")'-${hex32}; do"
     remote+=$'\n'"  [ -d \"\$s\" ] || continue"
     remote+=$'\n'"  [ \"\$s\" = '$(shell_quote "$SNAPSHOT_DIR")' ] && continue"
     remote+=$'\n'"  printf '%s\\t%s\\n' \"\$(stat -c '%y' \"\$s\" 2>/dev/null || printf -- 0)\" \"\$s\""
