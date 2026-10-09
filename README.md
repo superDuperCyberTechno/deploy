@@ -12,9 +12,11 @@ the client, driven by the config's four command groups:
    (e.g. `composer install --no-dev`), so the synced `vendor/` is
    production-ready.
 2. `pre_cmds_server` run on the server (over SSH) before the sync.
-3. The project is synced with `rsync -az --delete` (minus ignored files).
-4. `post_cmds_server` run on the server (e.g. `php artisan optimize`).
-5. `post_cmds_client` run locally after the deployment (e.g. `composer
+3. The current deployment folder is backed up recursively to
+   `<deployment_folder>.bak`; the previous backup is replaced.
+4. The project is synced with `rsync -az --delete` (minus ignored files).
+5. `post_cmds_server` run on the server (e.g. `php artisan optimize`).
+6. `post_cmds_client` run locally after the deployment (e.g. `composer
    install` to restore the dev environment). These also run — once — when
    any earlier step fails, so the local working copy is never left in a
    production state without development tooling.

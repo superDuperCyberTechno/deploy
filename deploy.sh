@@ -10,9 +10,11 @@
 #   1. Run the pre-sync client commands (e.g. composer install --no-dev) in
 #      the source directory.
 #   2. Run the pre-sync server commands (over SSH).
-#   3. Sync the project (minus ignored files) with rsync to the server.
-#   4. Run the post-sync server commands (e.g. php artisan optimize).
-#   5. Run the post-sync client commands (e.g. composer install to restore
+#   3. Back up the current deployment folder (recursively) to
+#      <deployment_folder>.bak on the server.
+#   4. Sync the project (minus ignored files) with rsync to the server.
+#   5. Run the post-sync server commands (e.g. php artisan optimize).
+#   6. Run the post-sync client commands (e.g. composer install to restore
 #      the dev environment). These also run — once — when any earlier step
 #      fails, so the local working copy is never left in a production state.
 #
@@ -394,6 +396,28 @@ fi
 if (( DRY_RUN == 0 )) && (( ${#pre_cmds_server[@]} > 0 )); then
   if ! run_remote_cmds "pre-sync" "${pre_cmds_server[@]}"; then
     die "pre-sync server command failed"
+  fi
+fi
+
+# --- Backup of the deployment folder ---------------------------------------
+# Before the sync replaces the project, keep a recursive copy of the
+# current server state in <deployment_folder>.bak, so a bad deploy or an
+# rsync --delete can be reverted. The previous backup is replaced; skipped
+# when the folder does not exist yet (first deploy) and never run in
+# --dry-run.
+
+if (( DRY_RUN == 1 )); then
+  log "dry run: skipping backup"
+else
+  log "backing up ${deployment_folder} -> ${deployment_folder}.bak"
+  remote="set -e"
+  remote+=$'\n'"if [ -d '$(shell_quote "$deployment_folder")' ]; then"
+  remote+=$'\n'"  rm -rf '$(shell_quote "${deployment_folder}.bak")'"
+  remote+=$'\n'"  cp -a '$(shell_quote "$deployment_folder")' '$(shell_quote "${deployment_folder}.bak")'"
+  remote+=$'\n'"fi"
+  if ! ssh "${SSH_ARGS[@]}" "root@${deployment_domain}" "bash -s" \
+    <<< "$remote"; then
+    die "backup failed"
   fi
 fi
 
