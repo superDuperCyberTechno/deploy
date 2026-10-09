@@ -76,6 +76,10 @@ post_cmds_server=(
     "php artisan optimize"
     # Restart queue workers so they pick up the deployed code.
     "php artisan queue:restart"
+    # Clear the cache for schedules using the withoutOverlapping() method
+    # this is relevant if a long running process is interrupted and the
+    # running flag is never released
+    "php artisan schedule:clear-cache"
 )
 
 # Commands run on the client after the deployment, in the source directory.
