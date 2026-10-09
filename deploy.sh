@@ -6,17 +6,28 @@
 # with SSH keys only, as the server's root user.
 #
 # Flow (the four command groups come from the config, so the script stays
-# project-agnostic):
-#   1. Run the pre-sync client commands (e.g. composer install --no-dev) in
-#      the source directory.
-#   2. Run the pre-sync server commands (over SSH).
-#   3. Back up the current deployment folder (recursively) to
-#      <deployment_folder>.bak on the server.
-#   4. Sync the project (minus ignored files) with rsync to the server.
-#   5. Run the post-sync server commands (e.g. php artisan optimize).
-#   6. Run the post-sync client commands (e.g. composer install to restore
+# project-agnostic). The web server serves the project through the
+# deployment_folder symlink, which always points at the currently active
+# snapshot folder (<name><snapshot id>). Every deploy builds a fresh
+# snapshot and then switches the symlink:
+#   1. Compute the local snapshot id from the git state (latest commit id
+#      plus every dirty file with its mtime).
+#   2. Read the active snapshot id on the server (the deployment_folder
+#      symlink target); when it equals the local id, abort — the source
+#      state is already live.
+#   3. Run the pre-sync client commands (e.g. composer install --no-dev)
+#      in the source directory, then the pre-sync server commands.
+#   4. Copy the active snapshot to a new folder named
+#      <basename><snapshot id> (first deploy: create it empty) and sync
+#      the project (minus ignored files) into it with rsync.
+#   5. Run the web-writable permission pass and the post-sync server
+#      commands (e.g. php artisan optimize) inside the new snapshot.
+#   6. Point the deployment_folder symlink at the new snapshot (last
+#      server-side step, so the switch is atomic) and prune old snapshots.
+#   7. Run the post-sync client commands (e.g. composer install to restore
 #      the dev environment). These also run — once — when any earlier step
-#      fails, so the local working copy is never left in a production state.
+#      fails, so the local working copy is never left in a production
+#      state.
 #
 # Configuration is read from deploy.conf.sh (generatable via: deploy.sh
 # --init). See extras/deploy/README.md for documentation.
@@ -29,7 +40,7 @@ readonly PROG
 # Semantic version (https://semver.org): bump MAJOR on breaking changes,
 # MINOR on backward-compatible additions, PATCH on backward-compatible
 # fixes.
-readonly VERSION="1.0.1"
+readonly VERSION="2.0.0"
 
 # Available boilerplate config names. Hardcoded: the .conf.sh files are
 # not shipped next to the script but downloaded from the public GitHub
@@ -97,8 +108,12 @@ Config keys (deploy.conf.sh):
                             (required)
     ssh_key                 Path to the SSH private key of the server root
                             user (required)
-    deployment_folder       Remote folder to sync into (default:
-                            /srv/<project-name>)
+    deployment_folder       Symlink path of the live site on the server
+                            (default: /srv/<project-name>); snapshot
+                            folders live next to it as <name><snapshot id>
+    keep_snapshots          Number of previous snapshots kept on the
+                            server, next to the active one (default 1;
+                            0 keeps all; the active is never pruned)
     deployment_user         user:group rsync --chown of the synced files,
                             e.g. root:www-data
     web_writable            Bash array of folders made group-writable via a
@@ -108,9 +123,9 @@ Config keys (deploy.conf.sh):
     pre_cmds_client         Bash array of commands run on the client before
                             the sync
     pre_cmds_server         Bash array of commands run on the server before
-                            the sync
+                            the sync (in the currently active deployment)
     post_cmds_server        Bash array of commands run on the server after
-                            the sync
+                            the sync (in the new snapshot folder)
     post_cmds_client        Bash array of commands run on the client after
                             the deployment (also on failure)
 EOF
@@ -141,14 +156,15 @@ run_client_cmds() {
 }
 
 # Run a config-declared command group on the server in one ssh session.
-# Entries build a bash script (set -e, cd'd into deployment_folder) fed to
-# the remote bash via stdin; a failing command aborts the rest.
+# Entries build a bash script (set -e, cd'd into cd_dir) fed to the
+# remote bash via stdin; a failing command aborts the rest.
 run_remote_cmds() {
-  local label="$1"; shift
+  # cd_dir: the directory the commands run in on the server.
+  local label="$1" cd_dir="$2"; shift 2
   local cmd remote
   log "running ${#} ${label} command(s) on the server"
   remote="set -e"
-  remote+=$'\n'"cd '$(shell_quote "$deployment_folder")'"
+  remote+=$'\n'"cd '$(shell_quote "$cd_dir")'"
   for cmd in "$@"; do
     remote+=$'\n'"${cmd}"
   done
@@ -169,6 +185,31 @@ shell_quote() { printf '%s' "$1" | sed "s/'/'\\\\''/g"; }
 require() {
   local -r tool="$1"
   command -v "$tool" >/dev/null 2>&1 || die "required tool not found: ${tool}"
+}
+
+# Compute the snapshot id: the latest commit id plus every dirty file
+# with its mtime (git status --porcelain=v1 -z, so paths with spaces are
+# read verbatim). Paths are relative to the repository root; the bare
+# second path field of a rename record has no status prefix and is skipped
+# (the renamed path already describes the change). A deleted file has no
+# mtime on disk and is hashed with a placeholder.
+snapshot_hash() {
+  local root entry path mtime
+  root="$(git -C "$SRC" rev-parse --show-toplevel)"
+  {
+    printf '%s\n' "commit $(git -C "$SRC" rev-parse HEAD)"
+    while IFS= read -r -d '' entry; do
+      # Regular entries start with two status chars and a space; the bare
+      # second field of a rename does not and is skipped.
+      [[ "${entry:2:1}" == " " ]] || continue
+      path="${entry:3}"
+      mtime="-"
+      if [[ -e "$root/$path" ]]; then
+        mtime="$(stat -c '%y' "$root/$path" 2>/dev/null || printf -- '- ')"
+      fi
+      printf '%s|%s|%s\n' "${entry:0:2}" "$mtime" "$path"
+    done < <(git -C "$SRC" status --porcelain=v1 -z 2>/dev/null)
+  } | md5sum | awk '{print $1}'
 }
 
 # Print the available boilerplate names (hardcoded in BOILERPLATES).
@@ -288,6 +329,7 @@ pre_cmds_client=()
 pre_cmds_server=()
 post_cmds_server=()
 post_cmds_client=()
+keep_snapshots=1
 
 set +u
 if ! source "$CONF" 2>/dev/null; then
@@ -310,6 +352,13 @@ if [[ ! -f "$ssh_key" ]]; then
 fi
 
 deployment_folder="${deployment_folder%/}" # drop a trailing slash
+
+# Snapshots retention must be a non-negative integer; anything else
+# (empty, negative, garbage) disables pruning (keep all) rather than
+# failing or deleting unpredictably.
+case "$keep_snapshots" in
+  ''|*[!0-9]*) keep_snapshots=0 ;;
+esac
 
 if [[ -z "$SRC" ]] || [[ ! -d "$SRC" ]]; then
   die "source directory not found: ${SRC}"
@@ -338,6 +387,28 @@ readonly SSH_BASE_ARGS=(-o BatchMode=yes -o ConnectTimeout=15)
 SSH_CMD="ssh -i $(printf '%q' "$ssh_key") ${SSH_BASE_ARGS[*]}"
 SSH_ARGS=(-i "$ssh_key" "${SSH_BASE_ARGS[@]}")
 
+# --- Snapshot id and paths ------------------------------------------------
+# The snapshot id must be a pure function of the local source state, so a
+# second deploy of an unmodified source can be detected and skipped.
+# Deriving it requires git (commit id + dirty-file list); the snapshot is
+# named <basename-of-deployment_folder><id> and lives next to the
+# deployment_folder symlink.
+if ! command -v git >/dev/null 2>&1; then
+  die "required tool not found: git (snapshot ids are built from the" \
+    "repository state)"
+fi
+if ! git -C "$SRC" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  die "source is not a git work tree: ${SRC}"
+fi
+SNAPSHOT_HASH="$(snapshot_hash)" || die "failed to compute snapshot id"
+if [[ -z "$SNAPSHOT_HASH" ]]; then
+  die "failed to compute snapshot id"
+fi
+SNAPSHOT_DIR="$(dirname "$deployment_folder")/$(basename "$deployment_folder")${SNAPSHOT_HASH}"
+SNAPSHOT_BUILT=0
+SNAPSHOT_ACTIVE=0
+log "snapshot id ${SNAPSHOT_HASH} -> ${SNAPSHOT_DIR}"
+
 # --- Command-group state (post_cmds_client also runs on failure) -----------
 
 IGNORE_FILE="$(mktemp)" || die "failed to create temporary ignore file"
@@ -355,9 +426,63 @@ cleanup() {
       "(restore)"
     run_client_cmds "post-sync" "${post_cmds_client[@]}" >&2 || true
   fi
+  # A failed deploy leaves an unused, possibly partial snapshot on the
+  # server; remove it so disk is not littered. The active snapshot is
+  # untouched: the symlink switch happens only after all fallible steps,
+  # setting SNAPSHOT_ACTIVE.
+  if (( SNAPSHOT_BUILT == 1 )) && (( SNAPSHOT_ACTIVE == 0 )) \
+    && (( DRY_RUN == 0 )); then
+    log "removing incomplete snapshot ${SNAPSHOT_DIR}"
+    ssh "${SSH_ARGS[@]}" "root@${deployment_domain}" \
+      "rm -rf -- $(shell_quote "$SNAPSHOT_DIR")" >/dev/null 2>&1 || true
+  fi
   rm -f "$IGNORE_FILE"
 }
 trap cleanup EXIT
+
+# --- Active snapshot check --------------------------------------------------
+# The deployment_folder symlink names the live snapshot. Read its target:
+# a missing folder (or a dangling symlink) is a first deploy with no
+# active snapshot; a plain directory is a legacy/unsupported layout and
+# aborts. Read-only, so it also runs in --dry-run.
+remote="set -e"
+remote+=$'\n'"if [ -L '$(shell_quote "$deployment_folder")' ]; then"
+remote+=$'\n'"  readlink -f '$(shell_quote "$deployment_folder")'"
+remote+=$'\n'"elif [ -d '$(shell_quote "$deployment_folder")' ]; then"
+remote+=$'\n'"  printf '%s\\n' 'DIR'"
+remote+=$'\n'"else"
+remote+=$'\n'"  printf '%s\\n' 'NONE'"
+remote+=$'\n'"fi"
+ACTIVE_SNAPSHOT=""
+if ! ACTIVE="$(ssh "${SSH_ARGS[@]}" "root@${deployment_domain}" "bash -s" \
+  <<< "$remote")"; then
+  die "failed to read the active snapshot on the server"
+fi
+
+case "$ACTIVE" in
+  ""|NONE)
+    log "no active deployment found on the server"
+    ;;
+  DIR)
+    die "${deployment_folder} is a plain directory — expected a symlink" \
+      "pointing at a snapshot (only the snapshot layout is supported," \
+      "no legacy deployments are migrated)"
+    ;;
+  *)
+    log "active snapshot on the server: ${ACTIVE}"
+    ACTIVE_SNAPSHOT="$ACTIVE"
+    ;;
+esac
+
+# Skip when the active snapshot already carries the local snapshot id: the
+# deployed source state is exactly the current one. Nothing ran yet, so no
+# post-sync client restore is needed — the flag below marks it as done so
+# the exit trap stays idle.
+if [[ "$(basename "$ACTIVE_SNAPSHOT")" == *"${SNAPSHOT_HASH}" ]]; then
+  log "deployment skipped: snapshot ${SNAPSHOT_HASH} is already live"
+  POST_CMDS_CLIENT_RUN=1
+  exit 0
+fi
 
 # --- Uncommitted changes safety net ----------------------------------------
 # Refuse to run silently on a dirty tree: list the uncommitted changes in
@@ -394,31 +519,36 @@ elif (( ${#pre_cmds_client[@]} > 0 )); then
 fi
 
 if (( DRY_RUN == 0 )) && (( ${#pre_cmds_server[@]} > 0 )); then
-  if ! run_remote_cmds "pre-sync" "${pre_cmds_server[@]}"; then
+  if ! run_remote_cmds "pre-sync" "$deployment_folder" "${pre_cmds_server[@]}"; then
     die "pre-sync server command failed"
   fi
 fi
 
-# --- Backup of the deployment folder ---------------------------------------
-# Before the sync replaces the project, keep a recursive copy of the
-# current server state in <deployment_folder>.bak, so a bad deploy or an
-# rsync --delete can be reverted. The previous backup is replaced; skipped
-# when the folder does not exist yet (first deploy) and never run in
-# --dry-run.
-
+# --- Build the new snapshot folder -----------------------------------------
+# The new snapshot starts as a recursive copy of the currently active one,
+# so server-side state that is never synced (.env, storage writes, ...)
+# carries over; rsync then overwrites it with the current source. A
+# leftover folder from an interrupted deploy is replaced. First deploy:
+# the snapshot is created empty. Never run in --dry-run.
 if (( DRY_RUN == 1 )); then
-  log "dry run: skipping backup"
+  log "dry run: skipping snapshot build"
 else
-  log "backing up ${deployment_folder} -> ${deployment_folder}.bak"
+  log "building snapshot ${SNAPSHOT_DIR}"
   remote="set -e"
-  remote+=$'\n'"if [ -d '$(shell_quote "$deployment_folder")' ]; then"
-  remote+=$'\n'"  rm -rf '$(shell_quote "${deployment_folder}.bak")'"
-  remote+=$'\n'"  cp -a '$(shell_quote "$deployment_folder")' '$(shell_quote "${deployment_folder}.bak")'"
+  remote+=$'\n'"if [ -d '$(shell_quote "$SNAPSHOT_DIR")' ]; then"
+  remote+=$'\n'"  rm -rf '$(shell_quote "$SNAPSHOT_DIR")'"
+  remote+=$'\n'"fi"
+  remote+=$'\n'"if [ -n '$(shell_quote "$ACTIVE_SNAPSHOT")' ] \
+&& [ -d '$(shell_quote "$ACTIVE_SNAPSHOT")' ]; then"
+  remote+=$'\n'"  cp -a '$(shell_quote "$ACTIVE_SNAPSHOT")' '$(shell_quote "$SNAPSHOT_DIR")'"
+  remote+=$'\n'"else"
+  remote+=$'\n'"  mkdir -p '$(shell_quote "$SNAPSHOT_DIR")'"
   remote+=$'\n'"fi"
   if ! ssh "${SSH_ARGS[@]}" "root@${deployment_domain}" "bash -s" \
     <<< "$remote"; then
-    die "backup failed"
+    die "failed to build the snapshot folder"
   fi
+  SNAPSHOT_BUILT=1
 fi
 
 # --- Step 2: sync with rsync ----------------------------------------------
@@ -449,9 +579,9 @@ if (( DRY_RUN == 1 )); then
   RSYNC_ARGS+=(-n)
 fi
 
-log "syncing ${SRC}/ -> root@${deployment_domain}:${deployment_folder}/"
+log "syncing ${SRC}/ -> root@${deployment_domain}:${SNAPSHOT_DIR}/"
 if ! rsync "${RSYNC_ARGS[@]}" "${SRC}/" \
-  "root@${deployment_domain}:${deployment_folder}/"; then
+  "root@${deployment_domain}:${SNAPSHOT_DIR}/"; then
   die "rsync failed"
 fi
 
@@ -487,7 +617,7 @@ if (( ${#web_writable[@]} > 0 )); then
     done
 
     log "applying web-server writable permissions to: ${web_writable[*]}"
-    if ! run_remote_cmds "permission" "${perm_cmds[@]}"; then
+    if ! run_remote_cmds "permission" "$SNAPSHOT_DIR" "${perm_cmds[@]}"; then
       die "failed to apply web-writable permissions"
     fi
   fi
@@ -496,8 +626,52 @@ fi
 # --- Step 3: post-sync server commands -------------------------------------
 
 if (( DRY_RUN == 0 )) && (( ${#post_cmds_server[@]} > 0 )); then
-  if ! run_remote_cmds "post-sync" "${post_cmds_server[@]}"; then
+  if ! run_remote_cmds "post-sync" "$SNAPSHOT_DIR" "${post_cmds_server[@]}"; then
     die "post-sync server command failed"
+  fi
+fi
+
+# --- Switch the symlink (last server-side step) ----------------------------
+# Point the deployment_folder symlink at the new snapshot: the web server
+# keeps serving the previous snapshot until now, so this step is the
+# atomic switch: ln -sfn replaces the existing symlink (or creates the
+# first one). Old snapshots beyond keep_snapshots are then pruned; the
+# just-linked active snapshot is never touched. Skipped in --dry-run.
+if (( DRY_RUN == 1 )); then
+  log "dry run: would switch ${deployment_folder} -> ${SNAPSHOT_DIR}"
+else
+  # Mark the snapshot as active before the switch runs: should the remote
+  # session die mid-switch, the (complete) snapshot must not be cleaned up
+  # like a partial one — worst case it stays as an unused snapshot that
+  # the next deploy prunes.
+  SNAPSHOT_ACTIVE=1
+  remote="set -e"
+  # touch stamps the deploy time: cp -a preserves the top-level mtime, so
+  # without it snapshots would not order chronologically for the pruning.
+  remote+=$'\n'"touch '$(shell_quote "$SNAPSHOT_DIR")'"
+  # ln -sfn atomically replaces an existing symlink and creates a missing
+  # one (a dangling symlink from a vanished snapshot is also replaced).
+  remote+=$'\n'"ln -sfn '$(shell_quote "$SNAPSHOT_DIR")' '$(shell_quote "$deployment_folder")'"
+  if (( keep_snapshots > 0 )); then
+    # Prune: keep the newest keep_snapshots snapshots besides the active
+    # one (sorted by mtime, i.e. deploy order), delete the rest.
+    hex32=""
+    for (( i = 0; i < 32; i++ )); do hex32+="[0-9a-f]"; done
+    # The snapshot-name glob suffix must stay unquoted so it actually
+    # expands; the dir/base parts are shell-quoted separately.
+    remote+=$'\n'"for s in '$(shell_quote "$(dirname "$deployment_folder")")'/'$(shell_quote "$(basename "$deployment_folder")")'"${hex32}"; do"
+    remote+=$'\n'"  [ -d \"\$s\" ] || continue"
+    remote+=$'\n'"  [ \"\$s\" = '$(shell_quote "$SNAPSHOT_DIR")' ] && continue"
+    remote+=$'\n'"  printf '%s\\t%s\\n' \"\$(stat -c '%y' \"\$s\" 2>/dev/null || printf -- 0)\" \"\$s\""
+    # keep_snapshots counts non-active snapshots, hence the +1: the active
+    # one is already excluded above, so delete from position N+1 onward.
+    remote+=$'\n'"done | sort -r | tail -n +$((keep_snapshots + 1)) | cut -f2- | while IFS= read -r d; do"
+    remote+=$'\n'"  rm -rf \"\$d\""
+    remote+=$'\n'"done || true"
+  fi
+  if ! ssh "${SSH_ARGS[@]}" "root@${deployment_domain}" "bash -s" \
+    <<< "$remote"; then
+    die "failed to switch the deployment symlink"
   fi
 fi
 
@@ -513,4 +687,4 @@ if (( DRY_RUN == 0 )) && (( ${#post_cmds_client[@]} > 0 )); then
   fi
 fi
 
-log "deployment complete"
+log "deployment complete: ${deployment_folder} -> ${SNAPSHOT_DIR}"
