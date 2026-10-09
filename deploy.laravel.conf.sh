@@ -52,6 +52,19 @@ ignored=(
     "public/hot"
 )
 
+# Entries shared between snapshots via the persistent home
+# <deployment_folder>-shared: each is migrated into the home once and
+# symlinked into every snapshot, so the storage folder (uploads,
+# sessions, cache, logs) is a single copy on the server instead of being
+# copied with every deploy — no torn copies, and sessions survive
+# deploys and rollbacks. Nested paths are allowed too (e.g.
+# "storage/app/public" shares exactly that folder). .env is always
+# shared this way; top-level entries you drop into the home yourself are
+# linked automatically.
+shared_links=(
+    "storage"
+)
+
 # ---- Command groups -------------------------------------------------------
 # Commands run on the client machine, in the source directory, before the
 # sync. Build the production vendor/ locally: the target server has no
@@ -68,10 +81,12 @@ pre_cmds_server=()
 # folder), in order. Each entry is arbitrary shell code (conditionals,
 # loops, ...) run under bash; a failing command aborts the rest.
 post_cmds_server=(
-    # .env is always excluded from the sync; the server keeps its own and
-    # the snapshot copy carries it into every new snapshot. Warn (remotely)
-    # when it is missing before running artisan. The warn goes to stderr
-    # with the [deploy][warn] prefix, like local warnings.
+    # .env is always excluded from the sync and lives in the shared home
+    # (<deployment_folder>-shared), symlinked into every snapshot. Warn
+    # (remotely) when it is missing before running artisan — on a first
+    # deploy (fresh server) place it in the shared home and redeploy, or
+    # create it there. The warn goes to stderr with the [deploy][warn]
+    # prefix, like local warnings.
     "if [ ! -f .env ]; then echo '[deploy][warn] no .env found on the server - artisan commands may fail' >&2; fi"
     "php artisan optimize"
     # Restart queue workers so they pick up the deployed code.

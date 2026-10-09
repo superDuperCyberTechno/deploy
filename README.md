@@ -22,8 +22,10 @@ builds a fresh snapshot and switches the symlink atomically:
 4. The active snapshot is copied to a new snapshot folder
    `<project-name>-<snapshot id>` (first deploy: created empty) and the
    project is synced into it with `rsync -az --delete` (minus ignored
-   files). Copying first carries server-side state (`.env`, `storage/`, …)
-   into the new snapshot.
+   files). Copying first carries server-side state into the new snapshot;
+   shared state (see `Shared state` below) is never copied — each entry
+   of the persistent `<name>-shared` home is symlinked into the snapshot
+   instead, so `.env` and runtime data live once, outside the snapshots.
 5. The web-server writable permission pass runs inside the new snapshot,
    then `post_cmds_server` (e.g. `php artisan optimize`).
 6. The `deployment_folder` symlink is switched to the new snapshot — the
@@ -107,18 +109,61 @@ command:
 
 It does exactly one thing: the atomic symlink switch to the snapshot that
 was serving right before the last deploy (deploy order, by snapshot
-mtime). No sync, no command groups, no pruning — the snapshot carries
-its own `.env`/`storage` state, and the next deploy prunes old snapshots
-as usual. `--rollback` needs only the config (`deployment_domain`,
-`ssh_key`, `deployment_folder`), not git or a source directory. It aborts
-when there is no active deployment (first deploy) or no earlier snapshot
-left.
+mtime). No sync, no command groups, no pruning — the snapshot's shared
+state (`.env`, `storage`) lives in the `<name>-shared` home and is
+symlinked, so it is identical across snapshots, and the next deploy
+prunes old snapshots as usual. `--rollback` needs only the config
+(`deployment_domain`, `ssh_key`, `deployment_folder`), not git or a
+source directory. It aborts when there is no active deployment (first
+deploy) or no earlier snapshot left.
 
 Old snapshots are pruned after each successful deploy: the
 `keep_snapshots` newest previous deployments (default `1`) are kept
 alongside the active one, which is never pruned; `0` disables pruning.
 A failed deploy leaves the symlink untouched — the previous snapshot
 keeps serving — and the incomplete new snapshot is removed again.
+
+## Shared state
+
+Runtime state must never be copied between snapshots (a copy of a
+live-written `storage` can be torn, and sessions written during a deploy
+would be lost at the switch). Instead, everything the deployments share
+lives in one persistent home on the server, `<deployment_folder>-shared`
+(e.g. `/srv/myapp-shared`), and **every top-level entry of that home is
+symlinked into each snapshot independently** — one symlink per entry, so
+the entries stay usable in place (rsync-excluded, see below) and a
+snapshot folder holds no copies of shared data at all.
+
+`shared_links` entries may be nested: `shared_links=("folder1/folder2")`
+shares exactly `folder2` across snapshots. The home mirrors the path as a
+real directory tree (`<name>-shared/folder1/folder2`), the snapshot gets
+one symlink at the same relative path, and the intermediate directory
+(`folder1`) stays ordinary code in the snapshot. Structural directories
+— ones that merely host a nested shared entry — are never linked
+wholesale; content inside them must be listed in `shared_links` to be
+shared.
+
+`deploy.sh` manages this home automatically:
+
+- `.env` is always shared this way: the first deploy after this feature
+  moves the server's `.env` into the home, every snapshot links it.
+- `shared_links` (config) lists additional entries to share (e.g.
+  `shared_links=("storage")` for Laravel, or `("folder1/folder2")` for
+  a nested one). The deploy migrates them into the home once (atomic
+  move; the home copy is authoritative afterwards) and symlinks them
+  into the snapshot at the same relative path.
+- Anything else the administrator drops into the **top level** of the
+  home — uploads, a sqlite file, sessions, a custom `uploads` dir — is
+  symlinked automatically on the next deploy, no config change needed.
+
+The migration happens in the build step, on the *new* snapshot's copy,
+never on the live one, so the web server keeps serving uninterrupted
+state until the atomic switch. The shared home is never pruned, never
+synced, and survives rollback: every snapshot — current or rolled back
+— serves the same `.env`, sessions and uploads.
+
+To seed the home manually (no `shared_links` config), move the content on
+the server once, e.g. `mv /srv/myapp/storage /srv/myapp-shared/storage`.
 
 ## Safety net
 
@@ -148,6 +193,7 @@ current version is printed by `deploy.sh --version`.
 | `deployment_user` | no | (empty) | `user:group` assigned to every synced file via rsync `--chown` (e.g. `root:www-data`); empty keeps root ownership — without the web group the web server cannot read the `750` directories |
 | `web_writable` | no | (empty) | Bash array of folders made group-writable over SSH (dirs `2770` with setgid, files `660`, no world access, ownership `deployment_user`) |
 | `ignored` | no | (empty) | Bash array of additional rsync exclude patterns |
+| `shared_links` | no | (empty) | Bash array of entries shared between snapshots via the persistent `<deployment_folder>-shared` home: each is migrated into the home once (move) and symlinked into every snapshot at the same relative path; nesting allowed (`folder1/folder2` shares exactly `folder2`, `folder1` stays code); `.env` is always handled this way; top-level entries already present in the home are linked too |
 | `pre_cmds_client` | no | (empty) | Bash array of shell commands run on the client (working directory: the source project) before the sync |
 | `pre_cmds_server` | no | (empty) | Bash array of shell commands run on the server (over SSH, in the currently active deployment) before the sync |
 | `post_cmds_server` | no | (empty) | Bash array of shell commands run on the server (over SSH, in the new snapshot folder) after the sync; a failing command aborts the rest |
@@ -233,11 +279,18 @@ project in the `ignored` entry.
 
 Notes:
 
-- Because `.env` is always ignored, the server keeps its own `.env` inside
-  the snapshots (created once, then carried into every new snapshot by the
-  copy step before the sync). The Laravel boilerplate checks for it before
-  running its `post_cmds_server` group and warns when it is missing;
-  non-Laravel projects add their own check to their config.
+- Because `.env` is always ignored, the server's `.env` is not synced
+  either: the deploy migrates it once into the shared home
+  (`<deployment_folder>-shared`) and every snapshot links it. The Laravel
+  boilerplate checks for a missing `.env` before running its
+  `post_cmds_server` group and warns; on a first deploy (no server
+  `.env` anywhere yet, e.g. a fresh server) place it in the shared home
+  and redeploy, or create it there.
+- Every `shared_links` entry — and anything already in the shared home —
+  is added to the rsync excludes **rooted at the top level** (e.g.
+  `/storage`, and `/folder1/folder2` for a nested entry): rsync would
+  otherwise replace the snapshot's symlink with a real directory, or
+  sync through it into the shared home.
 - Excluded paths are also protected from `rsync --delete`, so server-side
   data (uploads, sessions, logs, databases) is never wiped by a sync.
 - The first connection may prompt to accept the server's host key.

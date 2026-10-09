@@ -19,7 +19,9 @@
 #      in the source directory, then the pre-sync server commands.
 #   4. Copy the active snapshot to a new folder named
 #      <basename>-<snapshot id> (first deploy: create it empty) and sync
-#      the project (minus ignored files) into it with rsync.
+#      the project (minus ignored files) into it with rsync. Shared state
+#      (shared_links and everything in the <name>-shared home, see below)
+#      is not copied: each entry is symlinked into the snapshot instead.
 #   5. Run the web-writable permission pass and the post-sync server
 #      commands (e.g. php artisan optimize) inside the new snapshot.
 #   6. Point the deployment_folder symlink at the new snapshot (last
@@ -43,7 +45,7 @@ readonly PROG
 # Semantic version (https://semver.org): bump MAJOR on breaking changes,
 # MINOR on backward-compatible additions, PATCH on backward-compatible
 # fixes.
-readonly VERSION="2.1.0"
+readonly VERSION="2.2.0"
 
 # Available boilerplate config names. Hardcoded: the .conf.sh files are
 # not shipped next to the script but downloaded from the public GitHub
@@ -127,6 +129,13 @@ Config keys (deploy.conf.sh):
                             remote chown/chmod pass (no file transfer)
     ignored                 Bash array of rsync exclude patterns (Laravel
                             defaults in boilerplate)
+    shared_links            Bash array of entries shared between
+                            snapshots via the persistent home
+                            <deployment_folder>-shared: each is migrated
+                            into the home once and symlinked into every
+                            snapshot. Nested paths allowed: folder1/folder2
+                            shares exactly folder2 (folder1 stays code);
+                            .env is always handled this way
     pre_cmds_client         Bash array of commands run on the client before
                             the sync
     pre_cmds_server         Bash array of commands run on the server before
@@ -195,6 +204,17 @@ read_active_snapshot() {
   remote+=$'\n'"  printf '%s\\n' 'NONE'"
   remote+=$'\n'"fi"
   ssh "${SSH_ARGS[@]}" "root@${deployment_domain}" "bash -s" <<< "$remote"
+}
+
+# Print the top-level entry names of the shared home
+# (<deployment_folder>-shared) on the server, one per line. Read-only and
+# exit-0 either way: a missing home is a first deploy (empty output), and
+# the names are used to exclude the entries from rsync and to link them
+# into every snapshot. Also runs in --dry-run.
+list_shared_entries() {
+  ssh "${SSH_ARGS[@]}" "root@${deployment_domain}" \
+    "if [ -d '$(shell_quote "$SHARED_HOME")' ]; then ls -A --" \
+    "'$(shell_quote "$SHARED_HOME")'; fi"
 }
 
 # Print an error message to stderr and exit with status 1.
@@ -351,6 +371,7 @@ deployment_folder=""
 deployment_user=""
 web_writable=()
 ignored=()
+shared_links=()
 pre_cmds_client=()
 pre_cmds_server=()
 post_cmds_server=()
@@ -385,6 +406,50 @@ deployment_folder="${deployment_folder%/}" # drop a trailing slash
 case "$keep_snapshots" in
   ''|*[!0-9]*) keep_snapshots=0 ;;
 esac
+
+# Clean and validate shared_links: entries are relative paths (nesting
+# allowed, e.g. folder1/folder2 shares exactly folder2), with no leading
+# slash, no empty / . / .. path components. An entry must not be an
+# ancestor of another entry: both would be linked wholesale and the
+# nested link would be created through the ancestor's home symlink
+# (rm -rf through it would delete home data).
+links_normalized=()
+for entry in "${shared_links[@]}"; do
+  entry="${entry%/}" # drop trailing slashes
+  if [[ -z "$entry" || "$entry" == /* ]]; then
+    die "invalid shared_links entry: ${entry} (relative paths only)"
+  fi
+  IFS='/' read -r -a parts <<< "$entry"
+  for part in "${parts[@]}"; do
+    if [[ -z "$part" || "$part" == "." || "$part" == ".." ]]; then
+      die "invalid shared_links entry: ${entry} (no empty, . or .. path" \
+        "components)"
+    fi
+  done
+  links_normalized+=("$entry")
+done
+for entry in "${links_normalized[@]}"; do
+  for other in "${links_normalized[@]}"; do
+    if [[ "$entry" != "$other" && "$other" == "$entry"/* ]]; then
+      die "invalid shared_links: ${entry} is an ancestor of ${other}"
+    fi
+  done
+done
+shared_links=("${links_normalized[@]}")
+
+# Structural top-level names: entries that host nested shared entries
+# (e.g. folder1 for folder1/folder2). They are ordinary code in the
+# snapshot and must never be linked wholesale themselves.
+STRUCTURAL=()
+for entry in "${shared_links[@]}"; do
+  case "$entry" in
+    */*) top="${entry%%/*}"
+         for s in "${STRUCTURAL[@]}"; do
+           [[ "$s" == "$top" ]] && top="" && break
+         done
+         [[ -n "$top" ]] && STRUCTURAL+=("$top") ;;
+  esac
+done
 
 if [[ -z "$SRC" ]] || [[ ! -d "$SRC" ]]; then
   die "source directory not found: ${SRC}"
@@ -483,6 +548,32 @@ if [[ "$MODE" == "rollback" ]]; then
   log "deployment rolled back: ${deployment_folder} -> ${TARGET}"
   exit 0
 fi
+
+# --- Shared state -----------------------------------------------------------
+# The shared home <deployment_folder>-shared holds the server's persistent
+# runtime state (.env, uploads, sessions, ...). Every top-level entry of
+# the home is symlinked into each snapshot independently, and the
+# shared_links entries are auto-migrated into the home once (see the build
+# step). Only the home's current contents matter, so the entries are read
+# now for the rsync excludes while the home is still untouched.
+SHARED_HOME="${deployment_folder}-shared"
+log "shared home: ${SHARED_HOME}"
+
+SHARED_ENTRIES=()
+mapfile -t SHARED_ENTRIES < <(list_shared_entries)
+if [[ -n "${SHARED_ENTRIES[*]:-}" ]]; then
+  log "shared entries on the server: ${SHARED_ENTRIES[*]}"
+fi
+# Top-level home entries that get linked wholesale: everything except the
+# structural ancestors of nested shared_links entries, which stay code.
+SHARED_ENTRIES_TOP=()
+for entry in "${SHARED_ENTRIES[@]}"; do
+  skip=0
+  for s in "${STRUCTURAL[@]}"; do
+    [[ "$entry" == "$s" ]] && skip=1 && break
+  done
+  (( skip )) || SHARED_ENTRIES_TOP+=("$entry")
+done
 
 # --- Snapshot id and paths ------------------------------------------------
 # The snapshot id must be a pure function of the local source state, so a
@@ -632,6 +723,34 @@ else
   remote+=$'\n'"else"
   remote+=$'\n'"  mkdir -p '$(shell_quote "$SNAPSHOT_DIR")'"
   remote+=$'\n'"fi"
+
+  # Shared state: every shared entry (shared_links, any depth, plus the
+  # top-level home entries) becomes one symlink in the snapshot at the
+  # same relative path, so no runtime state is ever copied between
+  # snapshots. Nested entries get their parent directories created in the
+  # snapshot (ordinary code dirs). Entries that do not exist in the home
+  # yet (shared_links and .env) are migrated into it once, atomically,
+  # when the snapshot still holds a real file/directory for them; the
+  # home copy is authoritative afterwards and a stale snapshot copy is
+  # replaced. All target names are known here (config + fetched home
+  # listing), so links and rsync excludes can never diverge.
+  log "linking shared state into ${SNAPSHOT_DIR}"
+  remote+=$'\n'"mkdir -p '$(shell_quote "$SHARED_HOME")'"
+  for entry in .env "${shared_links[@]}"; do
+    parent="$(dirname "$entry")"
+    remote+=$'\n'"if [ ! -e '$(shell_quote "$SHARED_HOME/$entry")' ] && [ -e '$(shell_quote "$SNAPSHOT_DIR/$entry")' ] && [ ! -L '$(shell_quote "$SNAPSHOT_DIR/$entry")' ]; then"
+    remote+=$'\n'"  mkdir -p '$(shell_quote "$SHARED_HOME/$parent")'"
+    remote+=$'\n'"  mv '$(shell_quote "$SNAPSHOT_DIR/$entry")' '$(shell_quote "$SHARED_HOME/$entry")'"
+    remote+=$'\n'"fi"
+  done
+  for entry in .env "${shared_links[@]}" "${SHARED_ENTRIES_TOP[@]}"; do
+    parent="$(dirname "$entry")"
+    remote+=$'\n'"if [ -e '$(shell_quote "$SHARED_HOME/$entry")' ]; then"
+    remote+=$'\n'"  mkdir -p '$(shell_quote "$SNAPSHOT_DIR/$parent")'"
+    remote+=$'\n'"  rm -rf '$(shell_quote "$SNAPSHOT_DIR/$entry")'"
+    remote+=$'\n'"  ln -s '$(shell_quote "$SHARED_HOME/$entry")' '$(shell_quote "$SNAPSHOT_DIR/$entry")'"
+    remote+=$'\n'"fi"
+  done
   if ! ssh "${SSH_ARGS[@]}" "root@${deployment_domain}" "bash -s" \
     <<< "$remote"; then
     die "failed to build the snapshot folder"
@@ -650,6 +769,15 @@ fi
 # so this holds even when these files are committed in a subfolder.
 printf '%s\n' "${PROG}" >> "$IGNORE_FILE"
 printf '%s\n' "${CONF##*/}" >> "$IGNORE_FILE"
+# Shared state entries are excluded as rooted patterns (a nested entry
+# like folder1/folder2 as the full '/folder1/folder2' path): rsync would
+# otherwise replace their symlinks in the snapshot with real directories
+# (or write through them), clobbering the shared home. Structural
+# ancestors stay excluded-free — they are ordinary code. .env is already
+# covered by the base ignore list.
+for entry in "${shared_links[@]}" "${SHARED_ENTRIES_TOP[@]}"; do
+  printf '/%s\n' "$entry" >> "$IGNORE_FILE"
+done
 
 RSYNC_ARGS=(-az --delete --exclude-from="$IGNORE_FILE")
 RSYNC_ARGS+=(--chmod="$MAIN_DIR_CHMOD")
@@ -689,18 +817,33 @@ if (( ${#web_writable[@]} > 0 )); then
     # bash session. chown only runs when deployment_user is set.
     perm_cmds=()
     quoted_paths=''
+    perm_targets=()
     for w in "${web_writable[@]}"; do
       w="${w%/}" # drop a trailing slash
-      quoted_paths+=" '$(shell_quote "$w")'"
+      to_share=0
+      for entry in "${shared_links[@]}" "${SHARED_ENTRIES_TOP[@]}"; do
+        if [[ "$entry" == "$w" ]]; then
+          to_share=1
+          break
+        fi
+      done
+      if (( to_share == 1 )); then
+        # A shared entry's writable folder lives in the shared home: chown
+        # and find must run on the real directory, not on the snapshot's
+        # symlink (which plain find would not descend into).
+        perm_targets+=("${SHARED_HOME}/${w}")
+      else
+        perm_targets+=("$w")
+      fi
+      quoted_paths+=" '$(shell_quote "${perm_targets[-1]}")'"
     done
     if [[ -n "$deployment_user" ]]; then
       perm_cmds+=("chown -R '$(shell_quote "$deployment_user")'${quoted_paths}")
     fi
-    for w in "${web_writable[@]}"; do
-      w="${w%/}" # drop a trailing slash
+    for t in "${perm_targets[@]}"; do
       perm_cmds+=(
-        "find '$(shell_quote "$w")' -type d -exec chmod 2770 {} +"
-        "find '$(shell_quote "$w")' -type f -exec chmod 660 {} +"
+        "find '$(shell_quote "$t")' -type d -exec chmod 2770 {} +"
+        "find '$(shell_quote "$t")' -type f -exec chmod 660 {} +"
       )
     done
 
