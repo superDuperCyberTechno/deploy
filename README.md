@@ -270,12 +270,15 @@ The **deploy toolchain** is never synced: the config files
 (`deploy.*.conf.sh`), plus the script itself and the active config appended
 by name at sync time, so a renamed script stays excluded as well.
 
-The **Laravel defaults** live in the generated boilerplate config and cover
-the storage/ internals (`storage/app/*`, `storage/framework/{cache,sessions,views}/*`,
-`storage/logs/*`, `storage/*.key`), the sqlite database (`database/*.sqlite*`),
-the compiled bootstrap cache (`bootstrap/cache/*`) and generated public
-artifacts (`public/storage`, `public/hot`). Extend or replace them per
-project in the `ignored` entry.
+The **Laravel defaults** live in the generated boilerplate config. The
+`storage/` internals are not listed in `ignored` anymore: the script
+excludes every `shared_links` entry rooted at the top (`/storage`) before
+syncing. The boilerplate's `ignored` covers the sqlite journal sidecars
+(`database/*.sqlite*`), the compiled bootstrap cache (`bootstrap/cache/*`)
+and generated public artifacts (`public/storage`, `public/hot`), while its
+`shared_links` shares `storage` and the sqlite database file
+(`database/database.sqlite`) across snapshots. Extend or replace them per
+project in the `ignored` / `shared_links` entries.
 
 Notes:
 

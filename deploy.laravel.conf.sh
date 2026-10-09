@@ -31,21 +31,22 @@ web_writable=(
     # "database" #uncomment this if you use the SQLite database
     "storage"
     "bootstrap/cache"
+    # The shared SQLite file itself: when the file is in shared_links,
+    # list its exact path here so the permission pass runs on the real
+    # file in the shared home (a "database" dir entry would only touch
+    # the snapshot's symlink, not the file).
+    # "database/database.sqlite"
 )
 
 # Files/folders ignored during the rsync sync. These are merged with the
 # script's hardcoded, project-agnostic ignore list (.git, .env, .env.*,
-# node_modules, ...). The defaults below are the Laravel-specific ones:
-# the storage/ internals must never be overwritten from the repository, the
-# sqlite file is managed on the server, and the compiled bootstrap cache is
-# rebuilt server-side (e.g. php artisan optimize).
+# node_modules, ...). storage/ itself is not listed here: the script
+# auto-excludes every shared_links entry (below) from the sync. The
+# remaining Laravel-specific entries: the SQLite journal sidecars
+# (-wal/-shm/-journal, sitting next to the shared database file), the
+# compiled bootstrap cache (rebuilt server-side, e.g. php artisan
+# optimize), and generated public artifacts.
 ignored=(
-    "storage/app/*"
-    "storage/framework/cache/*"
-    "storage/framework/sessions/*"
-    "storage/framework/views/*"
-    "storage/logs/*"
-    "storage/*.key"
     "database/*.sqlite*"
     "bootstrap/cache/*"
     "public/storage"
@@ -63,6 +64,16 @@ ignored=(
 # linked automatically.
 shared_links=(
     "storage"
+    # The SQLite database file (DB_CONNECTION=sqlite): share the file, not
+    # the whole database/ folder — migrations and seeders are code and
+    # must keep syncing. The file is migrated into the shared home once,
+    # so server-side rows stay consistent across snapshots and rollbacks.
+    # Its -wal/-shm/-journal sidecars are covered by the
+    # "database/*.sqlite*" ignore above; with WAL journal mode they live
+    # per-snapshot until the next prune, so DELETE journal mode (Laravel's
+    # default) is the safe choice. For web-writable deployments also
+    # uncomment web_writable's "database/database.sqlite" entry.
+    "database/database.sqlite"
 )
 
 # ---- Command groups -------------------------------------------------------
