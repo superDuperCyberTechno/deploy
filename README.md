@@ -175,7 +175,7 @@ backward-compatible fixes. `deploy.sh --version` prints the version.
 |-----|----------|---------|---------|
 | `deployment_domain` | yes | - | Domain/IP to connect to over SSH as root |
 | `ssh_key` | yes | - | Path to the server root user's SSH private key |
-| `deployment_folder` | no | `/srv/<project-name>` | Symlink path of the live site; snapshots sit next to it |
+| `deployment_folder` | no | `/srv/<project-name>` | Absolute symlink path of the live site; snapshots sit next to it; parent must exist on server |
 | `keep_snapshots` | no | `1` | Previous snapshots kept beside the active one; `0` keeps all |
 | `deployment_user` | no | (empty) | `user:group` applied via rsync `--chown` (e.g. `root:www-data`); empty keeps root ownership |
 | `web_writable` | no | (empty) | Folders made group-writable over SSH (dirs `2770` with setgid, files `660`, no world access) |
@@ -185,6 +185,12 @@ backward-compatible fixes. `deploy.sh --version` prints the version.
 | `pre_cmds_server` | no | (empty) | Commands run on the server in the active deployment before sync |
 | `post_cmds_server` | no | (empty) | Commands run on the server in the new snapshot after sync; failure aborts the rest |
 | `post_cmds_client` | no | (empty) | Commands run on the client after deploy; also run once via exit trap if a step fails |
+
+`deployment_folder` must be an absolute path below `/`, without `.` or
+`..` components or control characters. Duplicate and trailing slashes are
+normalized; relative paths abort before any remote command runs. The
+parent folder must already exist on the server, so a typo cannot move the
+deployment elsewhere.
 
 Example:
 

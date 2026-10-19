@@ -9,10 +9,11 @@ deployment_domain=""
 # Path to the SSH private key of the server root user.
 ssh_key="$HOME/.ssh/id_ed25519"
 
-# Symlink path of the live site on the server (what the web server
-# serves). Defaults to /srv/<project-name> when left unset. Each deploy
-# builds a snapshot folder <name>-<snapshot id> next to it and switches
-# this symlink to the newest snapshot as the last server-side step.
+# Absolute symlink path of the live site on the server (what the web
+# server serves). Defaults to /srv/<project-name> when left unset; relative
+# paths are rejected. Each deploy builds a snapshot folder
+# <name>-<snapshot id> next to it and switches this symlink to the newest
+# snapshot as the last server-side step. The parent folder must exist.
 # deployment_folder="/srv/<project-name>"
 
 # user:group assigned to every synced file via rsync --chown. Root

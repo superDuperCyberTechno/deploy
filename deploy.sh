@@ -45,7 +45,7 @@ readonly PROG
 # Semantic version (https://semver.org): bump MAJOR on breaking changes,
 # MINOR on backward-compatible additions, PATCH on backward-compatible
 # fixes.
-readonly VERSION="2.2.1"
+readonly VERSION="2.2.2"
 
 # Available boilerplate config names. Hardcoded: the .conf.sh files are
 # not shipped next to the script but downloaded from the public GitHub
@@ -117,9 +117,10 @@ Config keys (deploy.conf.sh):
                             (required)
     ssh_key                 Path to the SSH private key of the server root
                             user (required)
-    deployment_folder       Symlink path of the live site on the server
-                            (default: /srv/<project-name>); snapshot
-                            folders live next to it as <name>-<snapshot id>
+    deployment_folder       Absolute symlink path of the live site on the
+                            server (default: /srv/<project-name>);
+                            snapshot folders live next to it as
+                            <name>-<snapshot id>
     keep_snapshots          Number of previous snapshots kept on the
                             server, next to the active one (default 1;
                             0 keeps all; the active is never pruned)
@@ -398,8 +399,6 @@ if [[ ! -f "$ssh_key" ]]; then
   die "ssh key not found: ${ssh_key}"
 fi
 
-deployment_folder="${deployment_folder%/}" # drop a trailing slash
-
 # Snapshots retention must be a non-negative integer; anything else
 # (empty, negative, garbage) disables pruning (keep all) rather than
 # failing or deleting unpredictably.
@@ -461,6 +460,36 @@ if [[ -z "$deployment_folder" ]]; then
   deployment_folder="/srv/${PROJECT_NAME}"
   log "deployment_folder unset, defaulting to ${deployment_folder}"
 fi
+
+# deployment_folder is embedded in remote rm -rf, ln -s and cp -a commands,
+# so require a normalized absolute path: a relative value would resolve
+# against root's home on the server. Reject control characters (invisible
+# path changes) and . or .. components.
+case "$deployment_folder" in
+  *[[:cntrl:]]*)
+    die "invalid deployment_folder: control characters are not allowed"
+    ;;
+esac
+while [[ "$deployment_folder" == */ ]]; do
+  deployment_folder="${deployment_folder%/}" # drop trailing slashes
+done
+while [[ "$deployment_folder" == *//* ]]; do
+  deployment_folder="${deployment_folder//\/\//\/}" # collapse //
+done
+if [[ -z "$deployment_folder" || "$deployment_folder" == "/" ]]; then
+  die "invalid deployment_folder: / (must name a folder below root)"
+fi
+case "$deployment_folder" in
+  /*) ;;
+  *) die "invalid deployment_folder: ${deployment_folder} (absolute path" \
+    "required)" ;;
+esac
+case "/${deployment_folder}/" in
+  *"/../"*|*"/./"*)
+    die "invalid deployment_folder: ${deployment_folder} (. and .." \
+      "components are not allowed)"
+    ;;
+esac
 
 if [[ "$MODE" != "rollback" ]]; then
   require rsync
@@ -713,7 +742,14 @@ if (( DRY_RUN == 1 )); then
   log "dry run: skipping snapshot build"
 else
   log "building snapshot ${SNAPSHOT_DIR}"
+  # Refuse to create the snapshot below a missing parent: mkdir -p would
+  # silently build the whole path, hiding a typo in deployment_folder.
+  DEPLOY_PARENT="$(dirname "$deployment_folder")"
   remote="set -e"
+  remote+=$'\n'"if [ ! -d '$(shell_quote "$DEPLOY_PARENT")' ]; then"
+  remote+=$'\n'"  printf '[deploy][error] deployment parent not found on the server: %s\\n' '$(shell_quote "$DEPLOY_PARENT")' >&2"
+  remote+=$'\n'"  exit 1"
+  remote+=$'\n'"fi"
   remote+=$'\n'"if [ -d '$(shell_quote "$SNAPSHOT_DIR")' ]; then"
   remote+=$'\n'"  rm -rf '$(shell_quote "$SNAPSHOT_DIR")'"
   remote+=$'\n'"fi"
