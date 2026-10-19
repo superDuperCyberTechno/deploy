@@ -28,7 +28,7 @@ symlink atomically:
 
 ## Requirements (local machine)
 
-### The client needs basic Unix tools, git, and root SSH access; the server needs only SSH, bash, and the app's own runtime.
+**The client needs basic Unix tools, git, and root SSH access; the server needs only SSH, bash, and the app's own runtime.**
 
 - `bash`, `rsync`, `ssh`, `openssh` client
 - `git` (the snapshot id comes from the repository state)
@@ -41,7 +41,7 @@ The server needs an SSH server, a `bash` shell, and whatever the app needs.
 
 ## Installation and updates
 
-### Download the script, make it executable, then run it directly or from `$PATH`.
+**Download the script, make it executable, then run it directly or from `$PATH`.**
 
 The following command can be run to update the script as well.
 
@@ -55,7 +55,7 @@ without creating or overwriting a file.
 
 ## Usage
 
-### Initialize a config, edit it, then deploy; flags cover preview, rollback, and custom config paths.
+**Initialize a config, edit it, then deploy; flags cover preview, rollback, and custom config paths.**
 
 ```bash
 ./extras/deploy/deploy.sh --init            # fetch laravel boilerplate into ./deploy.conf.sh
@@ -81,7 +81,7 @@ download aborts. The config path can also come from `DEPLOY_CONF` or
 
 ## Snapshots and rollback
 
-### Each deploy creates one immutable snapshot and points the live symlink at it; rollback switches back to the previous one.
+**Each deploy creates one immutable snapshot and points the live symlink at it; rollback switches back to the previous one.**
 
 A snapshot folder `<project-name>-<snapshot id>` sits next to the
 `deployment_folder` symlink. It is built only for its exact source state
@@ -109,7 +109,7 @@ incomplete snapshot.
 
 ## Shared state
 
-### Runtime data lives once in `<deployment_folder>-shared` and is symlinked into every snapshot, never copied.
+**Runtime data lives once in `<deployment_folder>-shared` and is symlinked into every snapshot, never copied.**
 
 Copying a live-written `storage` can tear files, and sessions written
 during a deploy would be lost at the switch. Instead, every top-level entry
@@ -144,7 +144,7 @@ To seed the home manually, move content on the server once, e.g.
 
 ## Web server: symlink and OPcache caveat
 
-### PHP can cache the resolved symlink path, so the old snapshot may keep serving until PHP-FPM reloads; make the web server pass the resolved path instead ([Deployer docs](https://deployer.org/docs/8.x/avoid-php-fpm-reloading)).
+**PHP can cache the resolved symlink path, so the old snapshot may keep serving until PHP-FPM reloads; make the web server pass the resolved path instead ([Deployer docs](https://deployer.org/docs/8.x/avoid-php-fpm-reloading)).**
 
 - **Nginx**: use `$realpath_root` for `SCRIPT_FILENAME` and `DOCUMENT_ROOT`.
 - **Caddy**: enable `resolve_root_symlink`.
@@ -152,7 +152,7 @@ To seed the home manually, move content on the server once, e.g.
 
 ## Safety net
 
-### Uncommitted git changes are listed and require confirmation before any deploy step runs.
+**Uncommitted git changes are listed and require confirmation before any deploy step runs.**
 
 `deploy.sh` checks `git status --porcelain` first, including before command
 groups. It lists changes and waits for Enter; Ctrl+C aborts. `--dry-run`
@@ -162,14 +162,14 @@ because git is needed for the snapshot id.
 
 ## Versioning
 
-### `deploy.sh` uses [semantic versioning](https://semver.org): `MAJOR`.`MINOR`.`PATCH`
+**`deploy.sh` uses [semantic versioning](https://semver.org): `MAJOR`.`MINOR`.`PATCH`**
 
 `MAJOR` for breaking changes, `MINOR` for backward-compatible additions, `PATCH` for
 backward-compatible fixes. `deploy.sh --version` prints the version.
 
 ## Configuration (`deploy.conf.sh`)
 
-### The config file sets connection, snapshot, sharing, and command options; only `deployment_domain` and `ssh_key` are required.
+**The config file sets connection, snapshot, sharing, and command options; only `deployment_domain` and `ssh_key` are required.**
 
 | Key | Required | Default | Purpose |
 |-----|----------|---------|---------|
@@ -216,7 +216,7 @@ post_cmds_client=(
 
 ## File permissions
 
-### Root owns everything, the web server reads via its group, and writes only inside `web_writable` folders.
+**Root owns everything, the web server reads via its group, and writes only inside `web_writable` folders.**
 
 - `deployment_user` adds `--chown=user:group` to the main sync. Use
   `<owner>:<web-server-group>` (the boilerplate ships `root:www-data`).
@@ -236,7 +236,7 @@ post_cmds_client=(
 
 ## Ignore handling
 
-### A hardcoded ignore list always applies; config adds project-specific excludes, and shared entries are excluded so rsync never replaces their symlinks.
+**A hardcoded ignore list always applies; config adds project-specific excludes, and shared entries are excluded so rsync never replaces their symlinks.**
 
 Every sync applies this **hardcoded, project-agnostic ignore list**:
 
@@ -275,7 +275,7 @@ Notes:
 
 ## Exit codes
 
-### `0` means success or an already-live source; `1` means a configuration, tooling, rsync, or post-deployment failure.
+**`0` means success or an already-live source; `1` means a configuration, tooling, rsync, or post-deployment failure.**
 
 - `0` - deployment succeeded, or the source was already live (skipped)
 - `1` - configuration, tooling, rsync, or post-deployment failure (the local
