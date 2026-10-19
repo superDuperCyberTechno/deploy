@@ -165,6 +165,17 @@ synced, and survives rollback: every snapshot — current or rolled back
 To seed the home manually (no `shared_links` config), move the content on
 the server once, e.g. `mv /srv/myapp/storage /srv/myapp-shared/storage`.
 
+## Web server: symlink and OPcache caveat
+
+PHP can cache the resolved `deployment_folder` path, so after a deploy the
+old snapshot may keep serving until PHP-FPM is reloaded. Configure the web
+server to pass the resolved path instead
+([Deployer: Avoid PHP-FPM Reloading](https://deployer.org/docs/8.x/avoid-php-fpm-reloading)):
+
+- **Nginx**: use `$realpath_root` for `SCRIPT_FILENAME` and `DOCUMENT_ROOT`.
+- **Caddy**: enable `resolve_root_symlink`.
+- **Apache**: set `opcache.revalidate_path=1`.
+
 ## Safety net
 
 Before anything (including the command groups) runs, `deploy.sh` checks the
