@@ -1,4 +1,4 @@
-# deploy
+# deploy 2.2.2
 
 Project-agnostic deployment script: syncs any project to a server with
 **rsync** over SSH, using **SSH keys only** and acting as **root**. The
