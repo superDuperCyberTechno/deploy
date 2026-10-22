@@ -102,13 +102,13 @@ post_cmds_server=(
     # create it there. The warn goes to stderr with the [deploy][warn]
     # prefix, like local warnings.
     "if [ ! -f .env ]; then echo '[deploy][warn] no .env found on the server - artisan commands may fail' >&2; fi"
-    "php artisan optimize"
     # Restart queue workers so they pick up the deployed code.
     "php artisan queue:restart"
     # Clear the cache for schedules using the withoutOverlapping() method
     # this is relevant if a long running process is interrupted and the
     # running flag is never released
     "php artisan schedule:clear-cache"
+    "php artisan optimize"
 )
 
 # Commands run on the client after the deployment, in the source directory.
