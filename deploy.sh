@@ -45,7 +45,7 @@ readonly PROG
 # Semantic version (https://semver.org): bump MAJOR on breaking changes,
 # MINOR on backward-compatible additions, PATCH on backward-compatible
 # fixes.
-readonly VERSION="2.3.0"
+readonly VERSION="2.3.1"
 
 # Available boilerplate config names. Hardcoded: the .conf.sh files are
 # not shipped next to the script but downloaded from the public GitHub
@@ -135,8 +135,9 @@ Config keys (deploy.conf.sh):
                             <deployment_folder>-shared: each is migrated
                             into the home once and symlinked into every
                             snapshot. Missing entries that are folders in
-                            the source are created empty in the home.
-                            Nested paths allowed: folder1/folder2 shares
+                            the source are recreated with their subfolders
+                            (empty) in the home. Nested paths allowed:
+                            folder1/folder2 shares
                             exactly folder2 (folder1 stays code); .env is
                             always handled this way
     pre_cmds_client         Bash array of commands run on the client before
@@ -607,9 +608,10 @@ for entry in "${SHARED_ENTRIES[@]}"; do
 done
 
 # Shared entries that are directories in the local source. A missing one is
-# created empty in the shared home during the snapshot build (first deploy),
-# so symlinking and the permission pass have a real target. File entries
-# (.env, sqlite, ...) are never fabricated and still need manual seeding.
+# recreated (including its subfolders) in the shared home during the snapshot
+# build (first deploy), so symlinking and the permission pass have real
+# targets. File entries (.env, sqlite, ...) are never fabricated and still
+# need manual seeding.
 SHARED_LINK_DIRS=()
 for entry in "${shared_links[@]}"; do
   if [[ -d "$SRC/$entry" ]]; then
@@ -792,11 +794,19 @@ else
     remote+=$'\n'"  mv '$(shell_quote "$SNAPSHOT_DIR/$entry")' '$(shell_quote "$SHARED_HOME/$entry")'"
     remote+=$'\n'"fi"
   done
-  # Bootstrap shared folders on first deploy: create only missing directory
-  # entries, never files. The shared home stays authoritative afterwards.
+  # Bootstrap shared folders on first deploy: recreate the source directory
+  # tree (empty, no files) when an entry is missing. The shared home stays
+  # authoritative afterwards.
   for entry in "${SHARED_LINK_DIRS[@]}"; do
     remote+=$'\n'"if [ ! -e '$(shell_quote "$SHARED_HOME/$entry")' ] && [ ! -L '$(shell_quote "$SHARED_HOME/$entry")' ]; then"
     remote+=$'\n'"  mkdir -p '$(shell_quote "$SHARED_HOME/$entry")'"
+    # Mirror every subfolder from the source under the shared entry.
+    while IFS= read -r -d '' subdir; do
+      rel="${subdir#"$SRC/$entry"}"
+      rel="${rel#/}"
+      [[ -n "$rel" ]] || continue
+      remote+=$'\n'"  mkdir -p '$(shell_quote "$SHARED_HOME/$entry/$rel")'"
+    done < <(find "$SRC/$entry" -type d -print0)
     remote+=$'\n'"  printf '[deploy] created shared folder: %s\\n' '$(shell_quote "$SHARED_HOME/$entry")'"
     remote+=$'\n'"fi"
   done

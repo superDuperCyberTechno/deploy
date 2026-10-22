@@ -59,9 +59,10 @@ ignored=(
 # symlinked into every snapshot, so the storage folder (uploads,
 # sessions, cache, logs) is a single copy on the server instead of being
 # copied with every deploy — no torn copies, and sessions survive
-# deploys and rollbacks. Missing folder entries are created empty in the
-# home on first deploy; file entries are not created. Nested paths are
-# allowed too (e.g. "storage/app/public" shares exactly that folder).
+# deploys and rollbacks. Missing folder entries are recreated with their
+# full subfolder tree (empty) in the home on first deploy; file entries
+# are not created. Nested paths are allowed too (e.g.
+# "storage/app/public" shares exactly that folder).
 # .env is always shared this way; top-level entries you drop into the
 # home yourself are linked automatically.
 shared_links=(

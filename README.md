@@ -1,4 +1,4 @@
-# deploy 2.3.0
+# deploy 2.3.1
 
 Project-agnostic deployment script: syncs any project to a server with
 **rsync** over SSH, using **SSH keys only** and acting as **root**. The
@@ -131,7 +131,7 @@ structural directories must be listed in `shared_links` to be shared.
   `("folder1/folder2")`). Each is moved into the shared folder once (atomic; the
   shared copy is authoritative) and symlinked into the snapshot at the same
   path. When an entry is a folder in the source and missing from the home
-  (first deploy), it is created empty before linking.
+  (first deploy), its full subfolder tree is recreated empty before linking.
 - Anything else dropped into the **top level** of the shared folder (uploads, a
   sqlite file, sessions, a custom `uploads` dir) is linked on the next
   deploy without config changes.
@@ -181,7 +181,7 @@ backward-compatible fixes. `deploy.sh --version` prints the version.
 | `deployment_user` | no | (empty) | `user:group` applied via rsync `--chown` (e.g. `root:www-data`); empty keeps root ownership |
 | `web_writable` | no | (empty) | Folders made group-writable over SSH (dirs `2770` with setgid, files `660`, no world access) |
 | `ignored` | no | (empty) | Additional rsync exclude patterns |
-| `shared_links` | no | (empty) | Entries shared via `<deployment_folder>-shared`: moved into the home once, then symlinked into every snapshot; missing source folders created empty in the home; nesting allowed; `.env` is always shared |
+| `shared_links` | no | (empty) | Entries shared via `<deployment_folder>-shared`: moved into the home once, then symlinked into every snapshot; missing source folders are recreated with their subfolders in the home; nesting allowed; `.env` is always shared |
 | `pre_cmds_client` | no | (empty) | Commands run on the client in the source project before sync |
 | `pre_cmds_server` | no | (empty) | Commands run on the server in the active deployment before sync |
 | `post_cmds_server` | no | (empty) | Commands run on the server in the new snapshot after sync; failure aborts the rest |
