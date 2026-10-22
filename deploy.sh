@@ -45,7 +45,7 @@ readonly PROG
 # Semantic version (https://semver.org): bump MAJOR on breaking changes,
 # MINOR on backward-compatible additions, PATCH on backward-compatible
 # fixes.
-readonly VERSION="2.2.2"
+readonly VERSION="2.3.0"
 
 # Available boilerplate config names. Hardcoded: the .conf.sh files are
 # not shipped next to the script but downloaded from the public GitHub
@@ -134,9 +134,11 @@ Config keys (deploy.conf.sh):
                             snapshots via the persistent home
                             <deployment_folder>-shared: each is migrated
                             into the home once and symlinked into every
-                            snapshot. Nested paths allowed: folder1/folder2
-                            shares exactly folder2 (folder1 stays code);
-                            .env is always handled this way
+                            snapshot. Missing entries that are folders in
+                            the source are created empty in the home.
+                            Nested paths allowed: folder1/folder2 shares
+                            exactly folder2 (folder1 stays code); .env is
+                            always handled this way
     pre_cmds_client         Bash array of commands run on the client before
                             the sync
     pre_cmds_server         Bash array of commands run on the server before
@@ -604,6 +606,17 @@ for entry in "${SHARED_ENTRIES[@]}"; do
   (( skip )) || SHARED_ENTRIES_TOP+=("$entry")
 done
 
+# Shared entries that are directories in the local source. A missing one is
+# created empty in the shared home during the snapshot build (first deploy),
+# so symlinking and the permission pass have a real target. File entries
+# (.env, sqlite, ...) are never fabricated and still need manual seeding.
+SHARED_LINK_DIRS=()
+for entry in "${shared_links[@]}"; do
+  if [[ -d "$SRC/$entry" ]]; then
+    SHARED_LINK_DIRS+=("$entry")
+  fi
+done
+
 # --- Snapshot id and paths ------------------------------------------------
 # The snapshot id must be a pure function of the local source state, so a
 # second deploy of an unmodified source can be detected and skipped.
@@ -777,6 +790,14 @@ else
     remote+=$'\n'"if [ ! -e '$(shell_quote "$SHARED_HOME/$entry")' ] && [ -e '$(shell_quote "$SNAPSHOT_DIR/$entry")' ] && [ ! -L '$(shell_quote "$SNAPSHOT_DIR/$entry")' ]; then"
     remote+=$'\n'"  mkdir -p '$(shell_quote "$SHARED_HOME/$parent")'"
     remote+=$'\n'"  mv '$(shell_quote "$SNAPSHOT_DIR/$entry")' '$(shell_quote "$SHARED_HOME/$entry")'"
+    remote+=$'\n'"fi"
+  done
+  # Bootstrap shared folders on first deploy: create only missing directory
+  # entries, never files. The shared home stays authoritative afterwards.
+  for entry in "${SHARED_LINK_DIRS[@]}"; do
+    remote+=$'\n'"if [ ! -e '$(shell_quote "$SHARED_HOME/$entry")' ] && [ ! -L '$(shell_quote "$SHARED_HOME/$entry")' ]; then"
+    remote+=$'\n'"  mkdir -p '$(shell_quote "$SHARED_HOME/$entry")'"
+    remote+=$'\n'"  printf '[deploy] created shared folder: %s\\n' '$(shell_quote "$SHARED_HOME/$entry")'"
     remote+=$'\n'"fi"
   done
   for entry in .env "${shared_links[@]}" "${SHARED_ENTRIES_TOP[@]}"; do
