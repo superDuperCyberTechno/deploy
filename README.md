@@ -1,4 +1,4 @@
-# deploy 2.3.1
+# deploy 2.4.0
 
 Project-agnostic deployment script: syncs any project to a server with
 **rsync** over SSH, using **SSH keys only** and acting as **root**. The
@@ -142,6 +142,12 @@ pruned or synced and survives rollback.
 
 To seed the home manually, move content on the server once, e.g.
 `mv /srv/myapp/storage /srv/myapp-shared/storage`.
+
+The Laravel boilerplate's `post_cmds_server` creates the shared SQLite
+folder and an empty `database.sqlite` on first deploy, using `storage`'s
+owner/group and group-writable permissions (directory `2770`, file `660`),
+then links the file into the current snapshot so the first deploy works.
+Existing folder/file contents are not overwritten.
 
 ## Web server: symlink and OPcache caveat
 

@@ -102,6 +102,11 @@ post_cmds_server=(
     # create it there. The warn goes to stderr with the [deploy][warn]
     # prefix, like local warnings.
     "if [ ! -f .env ]; then echo '[deploy][warn] no .env found on the server - artisan commands may fail' >&2; fi"
+    # Create the shared SQLite database folder and an empty database.sqlite
+    # once, using storage's owner/group (web-server writable) and setgid,
+    # group-writable permissions. Link the file into the snapshot so the
+    # first deploy can use SQLite; existing folder/file contents stay as-is.
+    'db_dir="$(dirname "$(readlink -f storage)")/database"; db_file="${db_dir}/database.sqlite"; if [ ! -d "${db_dir}" ]; then mkdir -p "${db_dir}"; chown --reference="$(readlink -f storage)" "${db_dir}"; chmod 2770 "${db_dir}"; fi; if [ ! -f "${db_file}" ]; then touch "${db_file}"; chown --reference="$(readlink -f storage)" "${db_file}"; chmod 660 "${db_file}"; fi; if [ ! -e database/database.sqlite ] && [ ! -L database/database.sqlite ]; then mkdir -p database; ln -s "${db_file}" database/database.sqlite; fi'
     # Restart queue workers so they pick up the deployed code.
     "php artisan queue:restart"
     # Clear the cache for schedules using the withoutOverlapping() method
