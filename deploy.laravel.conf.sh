@@ -29,25 +29,26 @@ deployment_user="root:www-data"
 # directories 2770, files 660, ownership deployment_user — the web server
 # writes via the group while root keeps ownership. No world access.
 web_writable=(
-    # "database" #uncomment this if you use the SQLite database
+    # Shared SQLite database folder: "database" resolves to the shared home
+    # when it is an ancestor of a shared file entry. SQLite creates journal
+    # files next to the real database file, so parent and file both need
+    # web-server write access.
+    "database"
     "storage"
     "bootstrap/cache"
-    # The shared SQLite file itself: when the file is in shared_links,
-    # list its exact path here so the permission pass runs on the real
-    # file in the shared home (a "database" dir entry would only touch
-    # the snapshot's symlink, not the file).
-    # "database/database.sqlite"
 )
 
 # Files/folders ignored during the rsync sync. These are merged with the
-# script's hardcoded, project-agnostic ignore list (.git, .env, .env.*,
-# node_modules, ...). storage/ itself is not listed here: the script
-# auto-excludes every shared_links entry (below) from the sync. The
-# remaining Laravel-specific entries: the SQLite journal sidecars
-# (-wal/-shm/-journal, sitting next to the shared database file), the
-# compiled bootstrap cache (rebuilt server-side, e.g. php artisan
-# optimize), and generated public artifacts.
+# script's hardcoded, project-agnostic ignore list (.git, node_modules,
+# ...). storage/ itself is not listed here: the script auto-excludes every
+# shared_links entry (below) from the sync. The remaining Laravel-specific
+# entries: env files, the SQLite journal sidecars (-wal/-shm/
+# -journal, sitting next to the shared database file), the compiled bootstrap
+# cache (rebuilt server-side, e.g. php artisan optimize), and generated
+# public artifacts.
 ignored=(
+    ".env"
+    ".env.*"
     "database/*.sqlite*"
     "bootstrap/cache/*"
     "public/storage"
@@ -60,22 +61,24 @@ ignored=(
 # sessions, cache, logs) is a single copy on the server instead of being
 # copied with every deploy — no torn copies, and sessions survive
 # deploys and rollbacks. Missing folder entries are recreated with their
-# full subfolder tree (empty) in the home on first deploy; file entries
-# are not created. Nested paths are allowed too (e.g.
-# "storage/app/public" shares exactly that folder).
-# .env is always shared this way; top-level entries you drop into the
-# home yourself are linked automatically.
+# full subfolder tree (empty) in the home on first deploy; missing file
+# entries are created empty there. Nested paths are allowed too (e.g.
+# "storage/app/public" shares exactly that folder). Top-level entries you
+# drop into the home yourself are linked automatically.
 shared_links=(
     "storage"
+    # Laravel env file: created empty in the shared home on first deploy;
+    # fill it in on the server after deployment. Its .env.* variants stay
+    # code and are ignored below.
+    ".env"
     # The SQLite database file (DB_CONNECTION=sqlite): share the file, not
     # the whole database/ folder — migrations and seeders are code and
     # must keep syncing. The file is migrated into the shared home once,
     # so server-side rows stay consistent across snapshots and rollbacks.
-    # Its -wal/-shm/-journal sidecars are covered by the
-    # "database/*.sqlite*" ignore above; with WAL journal mode they live
-    # per-snapshot until the next prune, so DELETE journal mode (Laravel's
-    # default) is the safe choice. For web-writable deployments also
-    # uncomment web_writable's "database/database.sqlite" entry.
+    # Its -wal/-shm/-journal sidecars are created next to the real file in
+    # the shared home and are covered by the "database/*.sqlite*" ignore.
+    # For web-writable deployments "database" is listed in web_writable,
+    # which resolves to the shared home parent.
     "database/database.sqlite"
 )
 
@@ -95,25 +98,22 @@ pre_cmds_server=()
 # folder), in order. Each entry is arbitrary shell code (conditionals,
 # loops, ...) run under bash; a failing command aborts the rest.
 post_cmds_server=(
-    # .env is always excluded from the sync and lives in the shared home
-    # (<deployment_folder>-shared), symlinked into every snapshot. Warn
-    # (remotely) when it is missing before running artisan — on a first
-    # deploy (fresh server) place it in the shared home and redeploy, or
-    # create it there. The warn goes to stderr with the [deploy][warn]
-    # prefix, like local warnings.
+    # .env is shared and lives in the shared home (<deployment_folder>-shared),
+    # symlinked into every snapshot. Warn (remotely) when it is missing before
+    # running artisan — on a first deploy (fresh server) place it in the shared
+    # home and redeploy, or create it there. The warn goes to stderr with the
+    # [deploy][warn] prefix, like local warnings.
     "if [ ! -f .env ]; then echo '[deploy][warn] no .env found on the server - artisan commands may fail' >&2; fi"
-    # Create the shared SQLite database folder and an empty database.sqlite
-    # once, using storage's owner/group (web-server writable) and setgid,
-    # group-writable permissions. Link the file into the snapshot so the
-    # first deploy can use SQLite; existing folder/file contents stay as-is.
-    'db_dir="$(dirname "$(readlink -f storage)")/database"; db_file="${db_dir}/database.sqlite"; if [ ! -d "${db_dir}" ]; then mkdir -p "${db_dir}"; chown --reference="$(readlink -f storage)" "${db_dir}"; chmod 2770 "${db_dir}"; fi; if [ ! -f "${db_file}" ]; then touch "${db_file}"; chown --reference="$(readlink -f storage)" "${db_file}"; chmod 660 "${db_file}"; fi; if [ ! -e database/database.sqlite ] && [ ! -L database/database.sqlite ]; then mkdir -p database; ln -s "${db_file}" database/database.sqlite; fi'
+    "php artisan optimize"
+    # deploy.sh bootstraps missing shared file entries (including the SQLite
+    # database) and links them into the snapshot; web_writable "database"
+    # applies web-server permissions in the shared home.
     # Restart queue workers so they pick up the deployed code.
     "php artisan queue:restart"
     # Clear the cache for schedules using the withoutOverlapping() method
     # this is relevant if a long running process is interrupted and the
     # running flag is never released
     "php artisan schedule:clear-cache"
-    "php artisan optimize"
 )
 
 # Commands run on the client after the deployment, in the source directory.

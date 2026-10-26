@@ -1,4 +1,4 @@
-# deploy 2.4.0
+# deploy 3.0.0
 
 Project-agnostic deployment script: syncs any project to a server with
 **rsync** over SSH, using **SSH keys only** and acting as **root**. The
@@ -96,8 +96,8 @@ last deploy:
 ```
 
 It does only the atomic symlink switch (deploy order, by snapshot mtime).
-No sync, commands, or pruning. Shared state (`.env`, `storage`) lives in
-the `<name>-shared` home, so it is the same across snapshots. `--rollback`
+No sync, commands, or pruning. Shared state (e.g. `.env`, `storage`) lives
+in the `<name>-shared` home, so it is the same across snapshots. `--rollback`
 needs only `deployment_domain`, `ssh_key`, and `deployment_folder` - no git
 or source directory. It aborts if there is no active deployment or no
 earlier snapshot.
@@ -125,13 +125,16 @@ structural directories must be listed in `shared_links` to be shared.
 
 `deploy.sh` manages the shared folder automatically:
 
-- `.env` is always shared: the first deploy moves the server's `.env` into
-  the home, and every snapshot links it.
-- `shared_links` lists additional entries (e.g. `("storage")` or
+- `shared_links` lists shared entries (e.g. `("storage")`,
+  `("folder1/folder2")`, or `(".env")` for Laravel).
   `("folder1/folder2")`). Each is moved into the shared folder once (atomic; the
   shared copy is authoritative) and symlinked into the snapshot at the same
   path. When an entry is a folder in the source and missing from the home
   (first deploy), its full subfolder tree is recreated empty before linking.
+  Missing file entries are created empty in the home; source content is
+  never copied. Entries absent from the source are treated as files;
+  directory entries must exist in the source. Laravel boilerplate lists
+  `.env`, so first deploy creates empty `.env`; fill it in on the server.
 - Anything else dropped into the **top level** of the shared folder (uploads, a
   sqlite file, sessions, a custom `uploads` dir) is linked on the next
   deploy without config changes.
@@ -143,11 +146,12 @@ pruned or synced and survives rollback.
 To seed the home manually, move content on the server once, e.g.
 `mv /srv/myapp/storage /srv/myapp-shared/storage`.
 
-The Laravel boilerplate's `post_cmds_server` creates the shared SQLite
-folder and an empty `database.sqlite` on first deploy, using `storage`'s
-owner/group and group-writable permissions (directory `2770`, file `660`),
-then links the file into the current snapshot so the first deploy works.
-Existing folder/file contents are not overwritten.
+Missing shared file entries are bootstrapped empty in the shared home and
+linked into the snapshot, so first deploy can use SQLite immediately.
+`web_writable` entries that are ancestors of shared file entries resolve to
+the shared home (for example `"database"` for `"database/database.sqlite"`),
+letting the web server write SQLite journal files next to the real database
+file. Existing folder/file contents are not overwritten.
 
 ## Web server: symlink and OPcache caveat
 
@@ -187,7 +191,7 @@ backward-compatible fixes. `deploy.sh --version` prints the version.
 | `deployment_user` | no | (empty) | `user:group` applied via rsync `--chown` (e.g. `root:www-data`); empty keeps root ownership |
 | `web_writable` | no | (empty) | Folders made group-writable over SSH (dirs `2770` with setgid, files `660`, no world access) |
 | `ignored` | no | (empty) | Additional rsync exclude patterns |
-| `shared_links` | no | (empty) | Entries shared via `<deployment_folder>-shared`: moved into the home once, then symlinked into every snapshot; missing source folders are recreated with their subfolders in the home; nesting allowed; `.env` is always shared |
+| `shared_links` | no | (empty) | Entries shared via `<deployment_folder>-shared`: moved into the home once, then symlinked into every snapshot; missing source folders are recreated with their subfolders in the home; missing file entries are created empty; nesting allowed |
 | `pre_cmds_client` | no | (empty) | Commands run on the client in the source project before sync |
 | `pre_cmds_server` | no | (empty) | Commands run on the server in the active deployment before sync |
 | `post_cmds_server` | no | (empty) | Commands run on the server in the new snapshot after sync; failure aborts the rest |
@@ -240,12 +244,16 @@ post_cmds_client=(
   `artisan` keep `+x`.
 - `web_writable` runs a remote permission pass over SSH (`chown -R` when
   `deployment_user` is set, then `find ... chmod` per folder). No files are
-  transferred. Listed folders (e.g. `storage`, `bootstrap/cache`) become
-  group-writable with setgid: directories `2770`, files `660`, owner
+  transferred. Listed folders (e.g. `storage`, `bootstrap/cache`, `database`)
+  become group-writable with setgid: directories `2770`, files `660`, owner
   `deployment_user`. The web server writes through the group, and new files
   inherit the group via setgid. It runs in the new snapshot before
   `post_cmds_server`, and before the symlink switch, so the live site is
   never affected.
+- A `web_writable` entry that is an ancestor of a shared file entry resolves
+  to the shared home. Example: `"database"` for
+  `"database/database.sqlite"` makes the shared SQLite folder writable, so
+  journal files are created next to the real database file.
 
 ## Ignore handling
 
@@ -254,7 +262,7 @@ post_cmds_client=(
 Every sync applies this **hardcoded, project-agnostic ignore list**:
 
 ```
-.git/  .env  .env.*  node_modules/  .DS_Store  Thumbs.db
+.git/  node_modules/  .DS_Store  Thumbs.db
 .phpunit.result.cache  .phpunit.cache
 deploy.*.conf.sh
 ```
@@ -265,19 +273,20 @@ script stays excluded.
 
 The Laravel defaults live in the generated boilerplate config. The script
 excludes every top-level `shared_links` entry (`/storage`) before syncing.
-The boilerplate's `ignored` covers sqlite journal sidecars
-(`database/*.sqlite*`), compiled bootstrap cache (`bootstrap/cache/*`), and
-generated public files (`public/storage`, `public/hot`). Its `shared_links`
-shares `storage` and `database/database.sqlite`. Extend or replace these
-per project.
+The boilerplate's `ignored` covers env files (`.env`, `.env.*`), sqlite
+journal sidecars (`database/*.sqlite*`), compiled bootstrap cache
+(`bootstrap/cache/*`), and generated public files (`public/storage`,
+`public/hot`). Its `shared_links` shares `storage`, `.env`, and
+`database/database.sqlite`; `web_writable` lists `database`, which resolves
+to the shared home. Extend or replace these per project.
 
 Notes:
 
-- `.env` is always ignored and never synced. The deploy moves the server's
-  `.env` into the shared home once, and every snapshot links it. The
-  Laravel boilerplate warns if `.env` is missing before `post_cmds_server`.
-  On a fresh server, place `.env` in the shared home and redeploy, or create
-  it there.
+- `.env` has no special handling. Laravel boilerplate lists it in
+  `shared_links`, so first deploy creates empty `.env` in the shared home and
+  symlinks it into every snapshot; fill it in on the server. Its `.env.*`
+  variants are ignored by Laravel boilerplate. The boilerplate warns if `.env`
+  is missing before `post_cmds_server`.
 - Every `shared_links` entry, and anything already in the shared home, is
   excluded **rooted at the top level** (`/storage`, `/folder1/folder2`).
   Otherwise rsync would replace the snapshot's symlink with a real

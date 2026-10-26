@@ -45,7 +45,7 @@ readonly PROG
 # Semantic version (https://semver.org): bump MAJOR on breaking changes,
 # MINOR on backward-compatible additions, PATCH on backward-compatible
 # fixes.
-readonly VERSION="2.4.0"
+readonly VERSION="3.0.0"
 
 # Available boilerplate config names. Hardcoded: the .conf.sh files are
 # not shipped next to the script but downloaded from the public GitHub
@@ -69,8 +69,6 @@ readonly BASE_URL="https://raw.githubusercontent.com/${REPO}/main"
 # renamed script stays excluded too.
 readonly BASE_IGNORES=(
   ".git/"
-  ".env"
-  ".env.*"
   "node_modules/"
   ".DS_Store"
   "Thumbs.db"
@@ -134,12 +132,12 @@ Config keys (deploy.conf.sh):
                             snapshots via the persistent home
                             <deployment_folder>-shared: each is migrated
                             into the home once and symlinked into every
-                            snapshot. Missing entries that are folders in
-                            the source are recreated with their subfolders
-                            (empty) in the home. Nested paths allowed:
-                            folder1/folder2 shares
-                            exactly folder2 (folder1 stays code); .env is
-                            always handled this way
+                            snapshot. Missing source folders are recreated
+                            with their subfolders (empty) in the home;
+                            missing file entries are created empty there.
+                            Entries absent from the source are treated as
+                            files. Nested paths allowed: folder1/folder2
+                            shares exactly folder2 (folder1 stays code)
     pre_cmds_client         Bash array of commands run on the client before
                             the sync
     pre_cmds_server         Bash array of commands run on the server before
@@ -583,11 +581,12 @@ fi
 
 # --- Shared state -----------------------------------------------------------
 # The shared home <deployment_folder>-shared holds the server's persistent
-# runtime state (.env, uploads, sessions, ...). Every top-level entry of
+# runtime state (shared_links, uploads, sessions, ...). Every top-level entry of
 # the home is symlinked into each snapshot independently, and the
-# shared_links entries are auto-migrated into the home once (see the build
-# step). Only the home's current contents matter, so the entries are read
-# now for the rsync excludes while the home is still untouched.
+# shared_links entries are auto-migrated into the home once and missing
+# file entries are created empty there (see the build step). Only the
+# home's current contents matter, so the entries are read now for the
+# rsync excludes while the home is still untouched.
 SHARED_HOME="${deployment_folder}-shared"
 log "shared home: ${SHARED_HOME}"
 
@@ -607,15 +606,19 @@ for entry in "${SHARED_ENTRIES[@]}"; do
   (( skip )) || SHARED_ENTRIES_TOP+=("$entry")
 done
 
-# Shared entries that are directories in the local source. A missing one is
-# recreated (including its subfolders) in the shared home during the snapshot
-# build (first deploy), so symlinking and the permission pass have real
-# targets. File entries (.env, sqlite, ...) are never fabricated and still
-# need manual seeding.
+# Shared entries split by source type. Missing directories are recreated
+# (including their subfolders) in the shared home during the snapshot build
+# (first deploy), so symlinking and the permission pass have real targets.
+# Missing file entries are created empty there; source content is never
+# copied, so the shared home stays authoritative. Entries absent from the
+# source are treated as files (directory entries must exist in the source).
 SHARED_LINK_DIRS=()
+SHARED_LINK_FILES=()
 for entry in "${shared_links[@]}"; do
   if [[ -d "$SRC/$entry" ]]; then
     SHARED_LINK_DIRS+=("$entry")
+  else
+    SHARED_LINK_FILES+=("$entry")
   fi
 done
 
@@ -749,7 +752,7 @@ fi
 
 # --- Build the new snapshot folder -----------------------------------------
 # The new snapshot starts as a recursive copy of the currently active one,
-# so server-side state that is never synced (.env, storage writes, ...)
+# so server-side state that is never synced (shared state, storage writes, ...)
 # carries over; rsync then overwrites it with the current source. A
 # leftover folder from an interrupted deploy is replaced. First deploy:
 # the snapshot is created empty. Never run in --dry-run.
@@ -780,14 +783,15 @@ else
   # same relative path, so no runtime state is ever copied between
   # snapshots. Nested entries get their parent directories created in the
   # snapshot (ordinary code dirs). Entries that do not exist in the home
-  # yet (shared_links and .env) are migrated into it once, atomically,
-  # when the snapshot still holds a real file/directory for them; the
-  # home copy is authoritative afterwards and a stale snapshot copy is
-  # replaced. All target names are known here (config + fetched home
-  # listing), so links and rsync excludes can never diverge.
+  # yet (shared_links) are migrated into it once, atomically,
+  # when the snapshot still holds a real file/directory for them; missing
+  # shared file entries are then created empty in the home. The home copy
+  # is authoritative afterwards and a stale snapshot copy is replaced. All
+  # target names are known here (config + fetched home listing), so links
+  # and rsync excludes can never diverge.
   log "linking shared state into ${SNAPSHOT_DIR}"
   remote+=$'\n'"mkdir -p '$(shell_quote "$SHARED_HOME")'"
-  for entry in .env "${shared_links[@]}"; do
+  for entry in "${shared_links[@]}"; do
     parent="$(dirname "$entry")"
     remote+=$'\n'"if [ ! -e '$(shell_quote "$SHARED_HOME/$entry")' ] && [ -e '$(shell_quote "$SNAPSHOT_DIR/$entry")' ] && [ ! -L '$(shell_quote "$SNAPSHOT_DIR/$entry")' ]; then"
     remote+=$'\n'"  mkdir -p '$(shell_quote "$SHARED_HOME/$parent")'"
@@ -810,7 +814,17 @@ else
     remote+=$'\n'"  printf '[deploy] created shared folder: %s\\n' '$(shell_quote "$SHARED_HOME/$entry")'"
     remote+=$'\n'"fi"
   done
-  for entry in .env "${shared_links[@]}" "${SHARED_ENTRIES_TOP[@]}"; do
+  # Bootstrap shared files on first deploy: create empty files when missing.
+  # Source content is never copied; the shared home stays authoritative.
+  for entry in "${SHARED_LINK_FILES[@]}"; do
+    parent="$(dirname "$entry")"
+    remote+=$'\n'"if [ ! -e '$(shell_quote "$SHARED_HOME/$entry")' ] && [ ! -L '$(shell_quote "$SHARED_HOME/$entry")' ]; then"
+    remote+=$'\n'"  mkdir -p '$(shell_quote "$SHARED_HOME/$parent")'"
+    remote+=$'\n'"  touch '$(shell_quote "$SHARED_HOME/$entry")'"
+    remote+=$'\n'"  printf '[deploy] created shared file: %s\\n' '$(shell_quote "$SHARED_HOME/$entry")'"
+    remote+=$'\n'"fi"
+  done
+  for entry in "${shared_links[@]}" "${SHARED_ENTRIES_TOP[@]}"; do
     parent="$(dirname "$entry")"
     remote+=$'\n'"if [ -e '$(shell_quote "$SHARED_HOME/$entry")' ]; then"
     remote+=$'\n'"  mkdir -p '$(shell_quote "$SNAPSHOT_DIR/$parent")'"
@@ -840,8 +854,7 @@ printf '%s\n' "${CONF##*/}" >> "$IGNORE_FILE"
 # like folder1/folder2 as the full '/folder1/folder2' path): rsync would
 # otherwise replace their symlinks in the snapshot with real directories
 # (or write through them), clobbering the shared home. Structural
-# ancestors stay excluded-free — they are ordinary code. .env is already
-# covered by the base ignore list.
+# ancestors stay excluded-free — they are ordinary code.
 for entry in "${shared_links[@]}" "${SHARED_ENTRIES_TOP[@]}"; do
   printf '/%s\n' "$entry" >> "$IGNORE_FILE"
 done
@@ -894,6 +907,17 @@ if (( ${#web_writable[@]} > 0 )); then
           break
         fi
       done
+      if (( to_share == 0 )); then
+        # A writable ancestor of a shared file entry also lives in the
+        # shared home (e.g. "database" for "database/database.sqlite"):
+        # SQLite creates journal files next to the real database file.
+        for entry in "${SHARED_LINK_FILES[@]}"; do
+          if [[ "$entry" == "$w"/* ]]; then
+            to_share=1
+            break
+          fi
+        done
+      fi
       if (( to_share == 1 )); then
         # A shared entry's writable folder lives in the shared home: chown
         # and find must run on the real directory, not on the snapshot's
