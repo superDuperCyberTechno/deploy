@@ -38,7 +38,7 @@ readonly PROG
 # Semantic version (https://semver.org): bump MAJOR on breaking changes,
 # MINOR on backward-compatible additions, PATCH on backward-compatible
 # fixes.
-readonly VERSION="4.0.0"
+readonly VERSION="4.0.1"
 
 # Available boilerplate config names. Hardcoded: the .conf.sh files are
 # not shipped next to the script but downloaded from the public GitHub
@@ -56,10 +56,11 @@ readonly BASE_URL="https://raw.githubusercontent.com/${REPO}/main"
 # Hardcoded, project-agnostic ignore list. These are merged with the
 # "ignored" entries from deploy.conf.sh for every sync. Project-specific
 # runtime paths belong in "preserved" instead, so they are bootstrapped on
-# first deploy and protected from rsync --delete. The toolchain config
-# files (deploy.conf.sh, deploy.<name>.conf.sh) are excluded here; the
-# script itself and the active config are appended by name at sync time,
-# so a renamed script stays excluded too.
+# first deploy and protected from rsync --delete. Local credentials and
+# OS/editor metadata are excluded so they never reach the server. The
+# toolchain config files (deploy.conf.sh, deploy.<name>.conf.sh) are
+# excluded here; the script itself and the active config are appended by
+# name at sync time, so a renamed script stays excluded too.
 readonly BASE_IGNORES=(
   ".git/"
   ".env"
@@ -67,8 +68,18 @@ readonly BASE_IGNORES=(
   "node_modules/"
   ".DS_Store"
   "Thumbs.db"
+  "desktop.ini"
+  "._*"
+  "*.swp"
+  "*.swo"
+  "*~"
+  "auth.json"
+  ".npmrc"
+  ".yarnrc.yml"
   ".phpunit.result.cache"
   ".phpunit.cache"
+  ".php-cs-fixer.cache"
+  ".phpcs-cache"
   "deploy.*.conf.sh"
 )
 

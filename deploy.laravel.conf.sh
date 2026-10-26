@@ -40,12 +40,14 @@ web_writable=(
 # ...). The remaining Laravel-specific entries: the SQLite journal
 # sidecars (-wal/-shm/-journal, sitting next to the preserved database
 # file), the compiled bootstrap cache (rebuilt server-side, e.g.
-# php artisan optimize), and generated public artifacts.
+# php artisan optimize), generated public artifacts, and the test suite
+# (not needed by the production runtime).
 ignored=(
     "database/*.sqlite*"
     "bootstrap/cache/*"
     "public/storage"
     "public/hot"
+    "tests/"
 )
 
 # Server-owned paths. rsync never writes into or deletes these, so the

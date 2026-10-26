@@ -1,4 +1,4 @@
-# deploy 4.0.0
+# deploy 4.0.1
 
 Project-agnostic deployment script: syncs any project directly into a
 server folder with **rsync** over SSH, using **SSH keys only** and acting
@@ -261,7 +261,9 @@ Every sync applies this **hardcoded, project-agnostic ignore list**:
 
 ```
 .git/  .env  .env.*  node_modules/  .DS_Store  Thumbs.db
-.phpunit.result.cache  .phpunit.cache
+desktop.ini  ._*  *.swp  *.swo  *~
+auth.json  .npmrc  .yarnrc.yml
+.phpunit.result.cache  .phpunit.cache  .php-cs-fixer.cache  .phpcs-cache
 deploy.*.conf.sh
 ```
 
@@ -272,10 +274,10 @@ script stays excluded.
 The Laravel defaults live in the generated boilerplate config. The script
 adds every `preserved` entry as a rooted exclude and excludes it from
 `--delete`. The boilerplate's `ignored` covers sqlite journal sidecars
-(`database/*.sqlite*`), compiled bootstrap cache (`bootstrap/cache/*`), and
-generated public files (`public/storage`, `public/hot`). Its `preserved`
-keeps `storage`, `.env`, and `database/database.sqlite`. Extend or replace
-these per project.
+(`database/*.sqlite*`), compiled bootstrap cache (`bootstrap/cache/*`),
+generated public files (`public/storage`, `public/hot`), and the test
+suite (`tests/`). Its `preserved` keeps `storage`, `.env`, and
+`database/database.sqlite`. Extend or replace these per project.
 
 Notes:
 

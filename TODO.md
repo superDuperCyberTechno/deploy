@@ -1,6 +1,6 @@
 # TODO
 
-Open security and usability issues, verified against `deploy.sh` 4.0.0.
+Open security and usability issues, verified against `deploy.sh` 4.0.1.
 Each entry lists location, problem and proposed fix.
 
 ## 1. No SSH host-key verification
