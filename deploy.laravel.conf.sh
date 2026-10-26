@@ -42,13 +42,10 @@ web_writable=(
 # script's hardcoded, project-agnostic ignore list (.git, node_modules,
 # ...). storage/ itself is not listed here: the script auto-excludes every
 # shared_links entry (below) from the sync. The remaining Laravel-specific
-# entries: env files, the SQLite journal sidecars (-wal/-shm/
-# -journal, sitting next to the shared database file), the compiled bootstrap
-# cache (rebuilt server-side, e.g. php artisan optimize), and generated
-# public artifacts.
+# entries: the SQLite journal sidecars (-wal/-shm/-journal, sitting next to
+# the shared database file), the compiled bootstrap cache (rebuilt
+# server-side, e.g. php artisan optimize), and generated public artifacts.
 ignored=(
-    ".env"
-    ".env.*"
     "database/*.sqlite*"
     "bootstrap/cache/*"
     "public/storage"

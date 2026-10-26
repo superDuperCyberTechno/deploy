@@ -45,7 +45,7 @@ readonly PROG
 # Semantic version (https://semver.org): bump MAJOR on breaking changes,
 # MINOR on backward-compatible additions, PATCH on backward-compatible
 # fixes.
-readonly VERSION="3.0.0"
+readonly VERSION="3.0.1"
 
 # Available boilerplate config names. Hardcoded: the .conf.sh files are
 # not shipped next to the script but downloaded from the public GitHub
@@ -69,6 +69,8 @@ readonly BASE_URL="https://raw.githubusercontent.com/${REPO}/main"
 # renamed script stays excluded too.
 readonly BASE_IGNORES=(
   ".git/"
+  ".env"
+  ".env.*"
   "node_modules/"
   ".DS_Store"
   "Thumbs.db"

@@ -1,4 +1,4 @@
-# deploy 3.0.0
+# deploy 3.0.1
 
 Project-agnostic deployment script: syncs any project to a server with
 **rsync** over SSH, using **SSH keys only** and acting as **root**. The
@@ -262,7 +262,7 @@ post_cmds_client=(
 Every sync applies this **hardcoded, project-agnostic ignore list**:
 
 ```
-.git/  node_modules/  .DS_Store  Thumbs.db
+.git/  .env  .env.*  node_modules/  .DS_Store  Thumbs.db
 .phpunit.result.cache  .phpunit.cache
 deploy.*.conf.sh
 ```
@@ -273,20 +273,20 @@ script stays excluded.
 
 The Laravel defaults live in the generated boilerplate config. The script
 excludes every top-level `shared_links` entry (`/storage`) before syncing.
-The boilerplate's `ignored` covers env files (`.env`, `.env.*`), sqlite
-journal sidecars (`database/*.sqlite*`), compiled bootstrap cache
-(`bootstrap/cache/*`), and generated public files (`public/storage`,
-`public/hot`). Its `shared_links` shares `storage`, `.env`, and
-`database/database.sqlite`; `web_writable` lists `database`, which resolves
-to the shared home. Extend or replace these per project.
+The boilerplate's `ignored` covers sqlite journal sidecars
+(`database/*.sqlite*`), compiled bootstrap cache (`bootstrap/cache/*`), and
+generated public files (`public/storage`, `public/hot`). Its `shared_links`
+shares `storage`, `.env`, and `database/database.sqlite`; `web_writable` lists
+`database`, which resolves to the shared home. Extend or replace these per
+project.
 
 Notes:
 
-- `.env` has no special handling. Laravel boilerplate lists it in
-  `shared_links`, so first deploy creates empty `.env` in the shared home and
-  symlinks it into every snapshot; fill it in on the server. Its `.env.*`
-  variants are ignored by Laravel boilerplate. The boilerplate warns if `.env`
-  is missing before `post_cmds_server`.
+- `.env` is never synced: base ignore list excludes `.env` and `.env.*`.
+  Laravel boilerplate lists `.env` in `shared_links`, so first deploy creates
+  empty `.env` in the shared home and symlinks it into every snapshot; fill it
+  in on the server. The boilerplate warns if `.env` is missing before
+  `post_cmds_server`.
 - Every `shared_links` entry, and anything already in the shared home, is
   excluded **rooted at the top level** (`/storage`, `/folder1/folder2`).
   Otherwise rsync would replace the snapshot's symlink with a real
